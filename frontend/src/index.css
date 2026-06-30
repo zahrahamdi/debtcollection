@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Vazirmatn', 'Tahoma', system-ui, sans-serif;
+  background-color: #f5f6fa;
+  color: #1f2433;
+  direction: rtl;
+}
+
+/* حذف دکمه‌های spinner از input عددی — در RTL باعث کلیپ‌شدن مقدار می‌شوند */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* اسکرول‌بار تمیز */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d7e3;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #b9bdcf;
+}

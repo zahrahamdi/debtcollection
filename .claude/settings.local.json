@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Read(//c/Users/z.hamdi/Desktop/**)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(node src/server.js)",
+      "Bash(curl -s -X POST http://localhost:3000/api/segments -H \"Content-Type: application/json\" -d '{\"title\":\"سبک\",\"credit_type\":\"loan\",\"condition_type\":\"lte\",\"cei_x\":15}')",
+      "Bash(curl -s http://localhost:3000/api/segments)",
+      "Bash(curl -s http://localhost:3000/api/health)",
+      "mcp__ad39ceb4-1409-48e7-8de5-402f97873967__read_file_content",
+      "mcp__ad39ceb4-1409-48e7-8de5-402f97873967__get_file_metadata",
+      "mcp__ad39ceb4-1409-48e7-8de5-402f97873967__list_recent_files",
+      "Bash(curl -s http://localhost:3000/api/strategies)",
+      "Bash(curl -s -X DELETE http://localhost:3000/api/strategies/1)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s http://localhost:3000/api/strategies/1)"
+    ]
+  }
+}
