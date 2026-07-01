@@ -73,6 +73,7 @@ export const ACTION_TYPE = {
   payment_full: { label: 'پرداخت کامل', icon: 'payment' },
   payment_partial: { label: 'پرداخت جزئی', icon: 'payment' },
   negotiator_call: { label: 'تماس مذاکره‌کننده', icon: 'call' },
+  strategy_failure: { label: 'شکست استراتژی', icon: 'call' },
 }
 
 // نوع همکاری مذاکره‌کننده (Epic 2)

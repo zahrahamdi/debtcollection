@@ -103,7 +103,8 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
   const waitMinutes = Number(stage?.wait_minutes) || 0
   const nextActionLabel = stage?.next_action_label || 'شکست استراتژی'
 
-  const callCount = Number(caseRow?.call_count) || 0
+  // فقط تماس‌های استراتژی فعلی شمرده می‌شوند (بعد از شروع استراتژی فعلی پرونده)
+  const callCount = Number(caseRow?.current_strategy_call_count) || 0
   const maxCalls = Number(caseRow?.max_call_count) || 0
   const isLastCall = maxCalls > 0 && callCount + 1 >= maxCalls
 
@@ -241,8 +242,7 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
             </span>
           </div>
           <div className="rounded-xl bg-brand-50 px-3 py-2 text-center text-sm font-medium text-brand-700">
-            تماس {toFaDigits((caseRow.call_count ?? 0) + 1)} از{' '}
-            {toFaDigits(caseRow.max_call_count ?? 0)}
+            تماس {toFaDigits(callCount + 1)} از {toFaDigits(maxCalls)}
           </div>
         </div>
       )}

@@ -227,6 +227,27 @@ router.get('/:id', (req, res) => {
       { $debtorId: caseRow.debtor_id, $id: id }
     );
 
+    // تعداد شکست استراتژی از روی case_history
+    const strategyFailureCount = query(
+      `SELECT COUNT(*) AS c FROM case_history WHERE case_id = $id AND operation = 'شکست استراتژی'`,
+      { $id: id }
+    )[0].c;
+
+    // تماس‌های واقعی مذاکره‌کننده = رکوردهای negotiator_call که خروجی تماس (call_status) دارند
+    const negotiatorCallOutcomes = actions.filter(
+      (a) => a.action_type === 'negotiator_call' && a.call_status
+    );
+    const totalNegotiatorCalls = negotiatorCallOutcomes.length;
+
+    // تماس‌های استراتژی فعلی = تماس‌هایی که بعد از آخرین marker شکست استراتژی ثبت شده‌اند
+    const failureSeqs = actions
+      .filter((a) => a.action_type === 'strategy_failure')
+      .map((a) => Number(a.seq) || 0);
+    const lastFailureSeq = failureSeqs.length ? Math.max(...failureSeqs) : 0;
+    const currentStrategyCallCount = negotiatorCallOutcomes.filter(
+      (a) => (Number(a.seq) || 0) > lastFailureSeq
+    ).length;
+
     res.json({
       data: {
         ...caseRow,
@@ -237,6 +258,9 @@ router.get('/:id', (req, res) => {
         files,
         other_cases: otherCases,
         negotiator_stage: computeNegotiatorStage(caseRow.strategy_id),
+        strategy_failure_count: strategyFailureCount,
+        total_negotiator_calls: totalNegotiatorCalls,
+        current_strategy_call_count: currentStrategyCallCount,
       },
     });
   } catch (err) {
@@ -299,7 +323,7 @@ router.get('/:id/history', (req, res) => {
        JOIN cases c ON c.id = h.case_id
        LEFT JOIN debtors d ON d.id = h.debtor_id
        WHERE ${conditions.join(' AND ')}
-       ORDER BY h.created_at DESC, h.id DESC`,
+       ORDER BY h.created_at ASC, h.id ASC`,
       params
     );
 

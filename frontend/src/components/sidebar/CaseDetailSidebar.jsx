@@ -57,6 +57,7 @@ function actionIconKey(actionType) {
 function actionDisplayTitle(action, idx) {
   if (action.action_type === 'payment_full') return 'پرداخت کامل'
   if (action.action_type === 'payment_partial') return 'پرداخت جزئی'
+  if (action.action_type === 'strategy_failure') return 'شکست استراتژی'
   return `اقدام ${toFaDigits(idx + 1)}: ${actionTypeLabel(action.action_type)}`
 }
 
@@ -86,14 +87,6 @@ function canRegisterCall(detail) {
     ['overdue', 'due_today'].includes(detail.action_status) &&
     canUserRegisterCall(detail)
   )
-}
-
-function lastNegotiatorCallIndex(actions) {
-  if (!actions?.length) return -1
-  for (let i = actions.length - 1; i >= 0; i--) {
-    if (actions[i].action_type === 'negotiator_call') return i
-  }
-  return -1
 }
 
 const NEGOTIATOR_RESULT_BY_STATUS = {
@@ -158,7 +151,10 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
         )}
 
         {!loading && detail && (() => {
-          const lastNegIdx = lastNegotiatorCallIndex(detail.actions)
+          // برای هر تماس مذاکره‌کننده فقط ردیفی که خروجی تماس (call_status) دارد نمایش داده شود
+          const visibleActions = (detail.actions || []).filter(
+            (a) => !(a.action_type === 'negotiator_call' && !a.call_status)
+          )
           return (
           <div className="flex min-h-full flex-col">
             {/* هدر */}
@@ -249,8 +245,8 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                 <InfoRow label="آخرین اقدام انجام‌شده" value={orDash(detail.last_action)} />
                 <InfoRow label="تاریخ آخرین اقدام" value={formatDate(detail.last_action_date)} />
                 <InfoRow
-                  label="تعداد تماس‌های انجام‌شده"
-                  value={`${toFaDigits(orDash(detail.call_count))} از ${toFaDigits(orDash(detail.max_call_count))}`}
+                  label="تعداد تماس مذاکره‌کننده"
+                  value={toFaDigits(detail.total_negotiator_calls ?? 0)}
                 />
               </div>
 
@@ -279,6 +275,12 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                 <InfoRow label="نسخه فرمول CEI" value={orDash(detail.cei_formula_version)} />
                 <InfoRow label="سگمنت پرونده" value={orDash(detail.segment_title)} />
                 <InfoRow label="استراتژی فعال" value={orDash(detail.strategy_title)} />
+                {Number(detail.strategy_failure_count) > 0 && (
+                  <InfoRow
+                    label="تعداد شکست استراتژی"
+                    value={toFaDigits(detail.strategy_failure_count)}
+                  />
+                )}
                 <InfoRow label="هزینه پرونده (ریال)" value={formatRial(detail.case_cost)} />
               </div>
 
@@ -340,13 +342,11 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
 
               {/* سابقه اقدامات روی پرونده */}
               <SectionTitle>سابقه اقدامات روی پرونده</SectionTitle>
-              {detail.actions?.length ? (
+              {visibleActions.length || canRegisterCall(detail) ? (
                 <ol className="space-y-3">
-                  {detail.actions.map((a, idx) => {
+                  {visibleActions.map((a, idx) => {
                     const Icon = iconFor(actionIconKey(a.action_type))
                     const payment = isPaymentAction(a.action_type)
-                    const showRegisterBtn =
-                      idx === lastNegIdx && a.action_type === 'negotiator_call' && canRegisterCall(detail)
                     return (
                       <li key={a.id} className="flex gap-3">
                         <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600">
@@ -379,27 +379,40 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                               نتیجه: {actionResultLabel(a, detail)}
                             </div>
                           )}
-
-                          {showRegisterBtn && (
-                            <div className="mt-2 border-t border-slate-100 pt-2">
-                              <div className="mb-2 text-[11px] text-slate-400">
-                                نمایش تماس شماره {toFaDigits((detail.call_count ?? 0) + 1)} از{' '}
-                                {toFaDigits(orDash(detail.max_call_count))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => onRegisterCall(detail)}
-                                className="flex items-center gap-2 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
-                              >
-                                <PhoneCall className="h-3.5 w-3.5" />
-                                ثبت خروجی تماس
-                              </button>
-                            </div>
-                          )}
                         </div>
                       </li>
                     )
                   })}
+
+                  {canRegisterCall(detail) && (
+                    <li className="flex gap-3">
+                      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600">
+                        <PhoneCall className="h-4 w-4" />
+                      </span>
+                      <div className="flex-1 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-slate-700">
+                            اقدام {toFaDigits(visibleActions.length + 1)}: تماس مذاکره‌کننده
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">نتیجه: در انتظار ثبت خروجی تماس</div>
+                        <div className="mt-2 border-t border-slate-100 pt-2">
+                          <div className="mb-2 text-[11px] text-slate-400">
+                            نمایش تماس شماره {toFaDigits((detail.current_strategy_call_count ?? 0) + 1)} از{' '}
+                            {toFaDigits(orDash(detail.max_call_count))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onRegisterCall(detail)}
+                            className="flex items-center gap-2 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+                          >
+                            <PhoneCall className="h-3.5 w-3.5" />
+                            ثبت خروجی تماس
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  )}
                 </ol>
               ) : (
                 <p className="py-2 text-xs text-slate-400">اقدامی روی این پرونده ثبت نشده است.</p>
