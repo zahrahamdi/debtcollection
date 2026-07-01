@@ -156,7 +156,8 @@ CREATE TABLE IF NOT EXISTS cases (
   next_action_date   TEXT,                                 -- تاریخ اقدام بعدی (شمسی)
   action_status      TEXT    NOT NULL DEFAULT 'waiting',   -- waiting | due_today | overdue
 
-  cei                REAL,                                 -- CEI محاسبه‌شده
+  cei                REAL,                                 -- CEI نهایی (محاسبه‌شده + cei_boost)
+  cei_boost          REAL    NOT NULL DEFAULT 0,           -- مجموع افزایش CEI از شکست استراتژی
   cei_formula_version TEXT,                                -- نسخه فرمول CEI استفاده‌شده
   segment_id         INTEGER,
   strategy_id        INTEGER,

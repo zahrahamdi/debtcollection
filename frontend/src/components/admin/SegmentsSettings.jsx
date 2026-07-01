@@ -24,7 +24,7 @@ const CONDITIONS = [
   { key: 'gte', label: 'بزرگ‌تر مساوی X' },
 ]
 
-const BAR_COLORS = ['bg-emerald-400', 'bg-amber-400', 'bg-rose-400', 'bg-sky-400', 'bg-violet-400', 'bg-teal-400']
+const BAR_COLORS = ['bg-emerald-400', 'bg-amber-400', 'bg-rose-400', 'bg-sky-400', 'bg-brand-400', 'bg-teal-400']
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'

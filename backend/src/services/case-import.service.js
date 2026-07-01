@@ -6,13 +6,25 @@
  */
 
 const { query, run } = require('../db/database');
-const { computeCei } = require('../db/cei');
+const { computeCei, applyCeiBoost } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
-const { todayJalali, tomorrowJalali, isWithinAllowedWindow, calcActionStatus } = require('../db/dateUtil');
+const { nowDatetime, nextAllowedStartDatetime, isWithinAllowedWindow, calcActionStatus, isActionDue } = require('../db/dateUtil');
 
 const MAX_ROWS = 1000;
 const REQUIRED_DEBT_CLASS = 'سررسید گذشته';
 const TERMINAL_STATUSES = ['paid', 'burned'];
+
+/** انواع اکشن استراتژی — ملاک Skip در بخش ۵.۴ PRD */
+const STRATEGY_ACTION_TYPES = [
+  'warning_sms',
+  'threatening_sms',
+  'warning_autocall',
+  'threatening_autocall',
+  'negotiator_call',
+];
+
+const DEFER_RESPIRE_OP = 'تأخیر تغییر استراتژی (Respite Time)';
+const DEFER_STRATEGY_COMPLETE_OP = 'انتظار پایان استراتژی فعلی';
 
 // هدرهای استاندارد Excel (ترتیب پیشنهادی — Story 4.1 PRD)
 const CANONICAL_EXCEL_HEADERS = [
@@ -195,16 +207,16 @@ function getFirstStrategyAction(strategyId) {
   return rows[0] || null;
 }
 
-/** تاریخ اقدام بعدی اولیه: امروز، مگر اولین اکشن پیامک/تماس خودکار باشد و خارج از بازه مجاز */
+/** datetime اقدام بعدی اولیه: الان، مگر خارج از بازه مجاز → فردا از allowed_from */
 function computeInitialNextActionDate(strategyId) {
   const first = getFirstStrategyAction(strategyId);
-  if (!first) return todayJalali();
+  if (!first) return nowDatetime();
   if (SMS_OR_AUTOCALL.includes(first.action_type)) {
     if (!isWithinAllowedWindow(first.allowed_from, first.allowed_to)) {
-      return tomorrowJalali();
+      return nextAllowedStartDatetime(first.allowed_from);
     }
   }
-  return todayJalali();
+  return nowDatetime();
 }
 
 function firstStrategyActionLabel(strategyId) {
@@ -492,20 +504,83 @@ function actionTypeToLabel(actionType) {
   return labels[actionType] || actionType;
 }
 
+function getSegmentById(segmentId) {
+  if (!segmentId) return null;
+  const rows = query('SELECT * FROM segments WHERE id = $id', { $id: segmentId });
+  return rows[0] || null;
+}
+
 function getPerformedActionTypes(caseId) {
+  const inList = STRATEGY_ACTION_TYPES.map((t) => `'${t}'`).join(', ');
   const rows = query(
-    `SELECT DISTINCT action_type FROM case_actions WHERE case_id = $id AND action_type IS NOT NULL`,
+    `SELECT DISTINCT action_type FROM case_actions
+     WHERE case_id = $id AND action_type IN (${inList})`,
     { $id: caseId }
   );
   return new Set(rows.map((r) => r.action_type));
 }
 
-function firstUnperformedAction(strategyId, performedTypes) {
-  const actions = query(
+function getStrategyActions(strategyId) {
+  if (!strategyId) return [];
+  return query(
     `SELECT * FROM strategy_actions WHERE strategy_id = $sid ORDER BY seq ASC`,
     { $sid: strategyId }
   );
-  return actions.find((a) => !performedTypes.has(a.action_type)) || null;
+}
+
+function isCurrentStrategyComplete(caseId, strategyId) {
+  const actions = getStrategyActions(strategyId);
+  if (!actions.length) return true;
+  const performed = getPerformedActionTypes(caseId);
+  return actions.every((a) => performed.has(a.action_type));
+}
+
+function isInRespiteTime(caseRow) {
+  return Boolean(caseRow.next_action_date) && !isActionDue(caseRow.next_action_date);
+}
+
+function insertCeiStrategyChangeHistory(caseId, debtorId, userName, caseSnapshot, details) {
+  const prevSeg = details.segment_previous_id
+    ? getSegmentById(details.segment_previous_id)
+    : null;
+  const newSeg = details.segment_new_id ? getSegmentById(details.segment_new_id) : null;
+  const prevStr = details.strategy_previous_id
+    ? getStrategyById(details.strategy_previous_id)
+    : null;
+  const newStr = details.strategy_new_id ? getStrategyById(details.strategy_new_id) : null;
+
+  insertCaseHistory(caseId, debtorId, userName || 'سیستم', 'به‌روزرسانی CEI و استراتژی', caseSnapshot, {
+    claims_previous: details.claims_previous ?? null,
+    claims_new: details.claims_new ?? null,
+    cei_previous: details.cei_previous ?? null,
+    cei_new: details.cei_new ?? null,
+    segment_previous_id: details.segment_previous_id ?? null,
+    segment_previous_title: prevSeg?.title ?? details.segment_previous_title ?? null,
+    segment_new_id: details.segment_new_id ?? null,
+    segment_new_title: newSeg?.title ?? details.segment_new_title ?? null,
+    strategy_previous_id: details.strategy_previous_id ?? null,
+    strategy_previous_title: prevStr?.title ?? details.strategy_previous_title ?? null,
+    strategy_new_id: details.strategy_new_id ?? null,
+    strategy_new_title: newStr?.title ?? details.strategy_new_title ?? null,
+    skipped_actions: details.skipped_actions ?? [],
+    start_action: details.start_action ?? null,
+    start_action_seq: details.start_action_seq ?? null,
+    note: details.note ?? null,
+  });
+}
+
+function firstUnperformedAction(strategyId, performedTypes) {
+  return getStrategyActions(strategyId).find((a) => !performedTypes.has(a.action_type)) || null;
+}
+
+function resolveStatusForStartAction(startActionType, caseRow) {
+  if (startActionType !== 'negotiator_call') {
+    return { case_status: 'pending_strategy_start', next_action: actionTypeToLabel(startActionType) };
+  }
+  if (caseRow.assigned_negotiator_id) {
+    return { case_status: 'pending_negotiator_call', next_action: 'تماس مذاکره‌کننده' };
+  }
+  return { case_status: 'pending_negotiator_assignment', next_action: 'تخصیص به مذاکره‌کننده' };
 }
 
 /**
@@ -528,7 +603,10 @@ function stepCalculateCei(caseId, caseData, ctx) {
   }
 
   const params = JSON.parse(formula.params);
-  const { cei } = computeCei(formulaType, params, caseData);
+  const caseRow = getCaseById(caseId);
+  const ceiBoost = Number(caseRow?.cei_boost) || 0;
+  const { cei: computedCei } = computeCei(formulaType, params, caseData);
+  const cei = applyCeiBoost(computedCei, ceiBoost);
   const formulaVersion = `v${formula.version}`;
 
   const statusAfterCei = ctx.isNewCase ? 'pending_strategy' : ctx.caseSnapshot.case_status;
@@ -542,6 +620,8 @@ function stepCalculateCei(caseId, caseData, ctx) {
   const snapshot = { ...ctx.caseSnapshot, case_status: statusAfterCei };
   insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'محاسبه CEI', snapshot, {
     cei,
+    computed_cei: computedCei,
+    cei_boost: ceiBoost,
     formula_version: formulaVersion,
     cei_previous: ctx.previousCei ?? null,
   });
@@ -580,7 +660,7 @@ function stepAssignSegment(caseId, cei, formulaType, caseData, caseSnapshot) {
 /**
  * مرحله ۳ — تخصیص استراتژی (Story 5.1 / 12.2 PRD)
  */
-function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActionType = null) {
+function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActionType = null, options = {}) {
   const strategy = pickStrategyForSegment(segmentId, caseData.credit_type);
   if (!strategy) {
     insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تخصیص استراتژی', caseSnapshot, {
@@ -590,13 +670,19 @@ function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActi
     return { ok: false };
   }
 
+  const caseRow = getCaseById(caseId);
   let nextAction = firstStrategyActionLabel(strategy.id);
+  let newStatus = 'pending_strategy_start';
+
   if (startActionType) {
     nextAction = actionTypeToLabel(startActionType);
+    const resolved = resolveStatusForStartAction(startActionType, caseRow);
+    newStatus = resolved.case_status;
+    nextAction = resolved.next_action;
   }
+
+  const nextActionDate = options.nextActionDate ?? computeInitialNextActionDate(strategy.id);
   const maxCalls = maxCallCountForStrategy(strategy.id);
-  const newStatus = 'pending_strategy_start';
-  const nextActionDate = computeInitialNextActionDate(strategy.id);
   const snapshot = {
     ...caseSnapshot,
     case_status: newStatus,
@@ -618,74 +704,211 @@ function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActi
     }
   );
 
-  insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تخصیص استراتژی', snapshot, {
-    strategy_id: strategy.id,
-    strategy_title: strategy.title,
-    segment_id: segmentId,
-  });
-
-  return { ok: true, strategy };
+  return { ok: true, strategy, snapshot, nextAction, startActionType };
 }
 
 /**
  * منطق تغییر استراتژی پس از تغییر سگمنت — بخش ۵.۴ PRD
  */
-function stepChangeStrategyOnSegmentShift(caseId, newSegmentId, caseData, caseSnapshot, previousStrategyId) {
+function stepChangeStrategyOnSegmentShift(caseId, newSegmentId, caseData, caseSnapshot, previousCase, historyCtx) {
   const strategy = pickStrategyForSegment(newSegmentId, caseData.credit_type);
   if (!strategy) {
-    insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تغییر استراتژی', caseSnapshot, {
-      error: 'استراتژی جدید برای سگمنت یافت نشد',
-      segment_id: newSegmentId,
+    insertCeiStrategyChangeHistory(caseId, caseData.debtor_id, historyCtx.userName, caseSnapshot, {
+      ...historyCtx,
+      note: 'استراتژی جدید برای سگمنت یافت نشد',
     });
     return { ok: false };
   }
 
   const performed = getPerformedActionTypes(caseId);
-  const startAction = firstUnperformedAction(strategy.id, performed);
-  const allActions = query(
-    `SELECT action_type, seq FROM strategy_actions WHERE strategy_id = $sid ORDER BY seq ASC`,
-    { $sid: strategy.id }
-  );
+  const allActions = getStrategyActions(strategy.id);
   const skipped = allActions.filter((a) => performed.has(a.action_type)).map((a) => a.action_type);
+  const startAction = firstUnperformedAction(strategy.id, performed);
+
+  const baseHistory = {
+    ...historyCtx,
+    strategy_previous_id: previousCase.strategy_id,
+    strategy_new_id: strategy.id,
+    skipped_actions: skipped,
+  };
 
   if (!startAction) {
-    insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تغییر استراتژی', caseSnapshot, {
-      strategy_id: strategy.id,
-      strategy_title: strategy.title,
-      note: 'تمام اکشن‌های استراتژی جدید قبلاً انجام شده — تا پایان استراتژی فعلی منتظر می‌مانیم',
+    insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', DEFER_STRATEGY_COMPLETE_OP, caseSnapshot, {
+      deferred_all_skipped: true,
+      strategy_previous_id: previousCase.strategy_id,
+      strategy_new_id: strategy.id,
+      strategy_new_title: strategy.title,
       skipped_actions: skipped,
-      previous_strategy_id: previousStrategyId,
+      target_status_after_complete: 'pending_legal_assignment',
+      ...historyCtx,
     });
-    return { ok: true, deferred: true };
+    insertCeiStrategyChangeHistory(caseId, caseData.debtor_id, historyCtx.userName, caseSnapshot, {
+      ...baseHistory,
+      start_action: null,
+      note: 'تمام اکشن‌های استراتژی جدید قبلاً انجام شده — تا پایان استراتژی فعلی منتظر می‌مانیم',
+    });
+    return { ok: true, deferred: true, allSkipped: true };
   }
 
-  run(`UPDATE cases SET case_status = 'pending_strategy', updated_at = datetime('now') WHERE id = $id`, {
-    $id: caseId,
-  });
-
-  const pendingSnapshot = { ...caseSnapshot, case_status: 'pending_strategy' };
-  insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تغییر استراتژی', pendingSnapshot, {
-    strategy_previous_id: previousStrategyId,
-    strategy_new_id: strategy.id,
-    strategy_new_title: strategy.title,
-    skipped_actions: skipped,
-    start_action: startAction.action_type,
-    start_action_seq: startAction.seq,
-  });
-
-  return stepAssignStrategy(
+  const nextActionDate = nowDatetime();
+  const assignResult = stepAssignStrategy(
     caseId,
     newSegmentId,
     caseData,
-    pendingSnapshot,
-    startAction.action_type
+    caseSnapshot,
+    startAction.action_type,
+    { nextActionDate }
   );
+
+  if (!assignResult.ok) return { ok: false };
+
+  insertCeiStrategyChangeHistory(caseId, caseData.debtor_id, historyCtx.userName, assignResult.snapshot, {
+    ...baseHistory,
+    start_action: startAction.action_type,
+    start_action_seq: startAction.seq,
+    note: 'سگمنت تغییر کرد — ورود به استراتژی جدید از اولین اکشن انجام‌نشده',
+  });
+
+  return { ok: true, strategy, startAction };
+}
+
+function storeDeferredRespiteShift(caseId, caseData, caseSnapshot, previousCase, historyCtx) {
+  insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', DEFER_RESPIRE_OP, caseSnapshot, {
+    pending_segment_strategy_shift: true,
+    respite_until: previousCase.next_action_date,
+    ...historyCtx,
+  });
+  insertCeiStrategyChangeHistory(caseId, caseData.debtor_id, historyCtx.userName, caseSnapshot, {
+    ...historyCtx,
+    skipped_actions: [],
+    start_action: null,
+    note: 'Respite Time — تغییر استراتژی پس از رسیدن next_action_date اعمال می‌شود',
+  });
 }
 
 /**
- * اجرای pipeline کامل CEI → سگمنت → استراتژی
- * فقط برای پرونده جدید یا آپدیت با افزایش مطالبات (بخش ۵.۴ PRD)
+ * پردازش تغییرات استراتژی معوق (Respite Time / پایان استراتژی)
+ * — در ابتدای هر import و توسط موتور استراتژی قابل فراخوانی است.
  */
+function processDeferredCeiStrategyShifts() {
+  let processed = 0;
+
+  const activeCases = query(
+    `SELECT * FROM cases WHERE case_status NOT IN ('paid', 'burned')`
+  );
+
+  for (const caseRow of activeCases) {
+    const deferComplete = query(
+      `SELECT details FROM case_history
+       WHERE case_id = $id AND operation = $op
+       ORDER BY id DESC LIMIT 1`,
+      { $id: caseRow.id, $op: DEFER_STRATEGY_COMPLETE_OP }
+    )[0];
+
+    if (deferComplete?.details) {
+      let meta;
+      try {
+        meta = JSON.parse(deferComplete.details);
+      } catch {
+        meta = null;
+      }
+      if (meta?.deferred_all_skipped && !meta.applied) {
+        if (isCurrentStrategyComplete(caseRow.id, meta.strategy_previous_id || caseRow.strategy_id)) {
+          if (caseRow.case_status !== 'paid') {
+            run(
+              `UPDATE cases SET case_status = 'pending_legal_assignment', next_action = 'تخصیص به حقوقی',
+               next_action_date = NULL, action_status = 'waiting', updated_at = datetime('now') WHERE id = $id`,
+              { $id: caseRow.id }
+            );
+            insertCaseHistory(
+              caseRow.id,
+              caseRow.debtor_id,
+              'سیستم',
+              'ارجاع به حقوقی پس از پایان استراتژی',
+              {
+                case_status: 'pending_legal_assignment',
+                next_action: 'تخصیص به حقوقی',
+                next_action_date: null,
+              },
+              {
+                ...meta,
+                applied: true,
+                note: 'استراتژی فعلی تمام شد و پرداخت انجام نشد',
+              }
+            );
+            processed += 1;
+          }
+        }
+      }
+    }
+
+    const deferRespite = query(
+      `SELECT details FROM case_history
+       WHERE case_id = $id AND operation = $op AND details LIKE '%pending_segment_strategy_shift%'
+       ORDER BY id DESC LIMIT 1`,
+      { $id: caseRow.id, $op: DEFER_RESPIRE_OP }
+    )[0];
+
+    if (!deferRespite?.details) continue;
+
+    let meta;
+    try {
+      meta = JSON.parse(deferRespite.details);
+    } catch {
+      continue;
+    }
+    if (!meta.pending_segment_strategy_shift || meta.applied) continue;
+    if (!isActionDue(caseRow.next_action_date)) continue;
+    if (meta.segment_previous_id === meta.segment_new_id) {
+      meta.applied = true;
+      continue;
+    }
+
+    const caseData = {
+      debtor_id: caseRow.debtor_id,
+      credit_type: caseRow.credit_type,
+      claims_amount: caseRow.claims_amount,
+      guarantee_type: caseRow.guarantee_type,
+      first_unpaid_no: caseRow.first_unpaid_no,
+    };
+
+    const snapshot = {
+      case_status: caseRow.case_status,
+      next_action: caseRow.next_action,
+      next_action_date: caseRow.next_action_date,
+    };
+
+    stepChangeStrategyOnSegmentShift(
+      caseRow.id,
+      meta.segment_new_id,
+      caseData,
+      snapshot,
+      caseRow,
+      {
+        userName: 'سیستم',
+        cei_previous: meta.cei_previous,
+        cei_new: meta.cei_new,
+        segment_previous_id: meta.segment_previous_id,
+        segment_new_id: meta.segment_new_id,
+        claims_previous: meta.claims_previous,
+        claims_new: meta.claims_new,
+      }
+    );
+
+    insertCaseHistory(
+      caseRow.id,
+      caseRow.debtor_id,
+      'سیستم',
+      'اعمال تغییر استراتژی معوق',
+      getCaseById(caseRow.id),
+      { applied: true, deferred_from: DEFER_RESPIRE_OP }
+    );
+    processed += 1;
+  }
+
+  return processed;
+}
+
 function runCeiSegmentStrategyPipeline(caseId, caseData, options = {}) {
   const {
     isNewCase = false,
@@ -730,54 +953,75 @@ function runCeiSegmentStrategyPipeline(caseId, caseData, options = {}) {
 
   const newSegmentId = segmentResult.segment.id;
 
+  const historyCtx = {
+    userName,
+    claims_previous: previousClaims,
+    claims_new: newClaims,
+    cei_previous: previousCei,
+    cei_new: ceiResult.cei,
+    segment_previous_id: previousSegmentId,
+    segment_new_id: newSegmentId,
+    segment_new_title: segmentResult.segment.title,
+    strategy_previous_id: previousCase?.strategy_id ?? null,
+  };
+
   if (isNewCase) {
-    stepAssignStrategy(caseId, newSegmentId, caseData, ceiResult.caseSnapshot);
+    const assignResult = stepAssignStrategy(caseId, newSegmentId, caseData, ceiResult.caseSnapshot);
+    if (assignResult.ok) {
+      insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'تخصیص استراتژی', assignResult.snapshot, {
+        strategy_id: assignResult.strategy.id,
+        strategy_title: assignResult.strategy.title,
+        segment_id: newSegmentId,
+      });
+    }
     return { ok: true, cei: ceiResult.cei, segmentId: newSegmentId };
   }
 
-  insertCaseHistory(
-    caseId,
-    caseData.debtor_id,
-    userName,
-    'به‌روزرسانی اطلاعات پرونده',
-    ceiResult.caseSnapshot,
-    {
-      claims_previous: previousClaims,
-      claims_new: newClaims,
-      cei_previous: previousCei,
-      cei_new: ceiResult.cei,
-    }
-  );
-
   if (previousSegmentId === newSegmentId) {
-    insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'به‌روزرسانی CEI', ceiResult.caseSnapshot, {
-      cei_previous: previousCei,
-      cei_new: ceiResult.cei,
-      formula_version: ceiResult.formulaVersion,
-      note: 'سگمنت تغییر نکرد — استراتژی فعلی ادامه می‌یابد',
+    insertCeiStrategyChangeHistory(caseId, caseData.debtor_id, userName, ceiResult.caseSnapshot, {
+      ...historyCtx,
+      strategy_new_id: previousCase.strategy_id,
+      skipped_actions: [],
+      start_action: null,
+      note: 'سگمنت تغییر نکرد — استراتژی فعلی بدون تغییر ادامه می‌یابد',
     });
     run(
-      `UPDATE cases SET case_status = $st, updated_at = datetime('now') WHERE id = $id`,
-      { $st: previousCase.case_status, $id: caseId }
+      `UPDATE cases SET case_status = $st, next_action = $na, next_action_date = $nad,
+       action_status = $as, updated_at = datetime('now') WHERE id = $id`,
+      {
+        $st: previousCase.case_status,
+        $na: previousCase.next_action,
+        $nad: previousCase.next_action_date,
+        $as: calcActionStatus(previousCase.next_action_date),
+        $id: caseId,
+      }
     );
     return { ok: true, cei: ceiResult.cei, segmentId: newSegmentId, strategyUnchanged: true };
   }
 
-  insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', 'به‌روزرسانی CEI', ceiResult.caseSnapshot, {
-    cei_previous: previousCei,
-    cei_new: ceiResult.cei,
-    formula_version: ceiResult.formulaVersion,
-    segment_previous_id: previousSegmentId,
-    segment_new_id: newSegmentId,
-    segment_new_title: segmentResult.segment.title,
-  });
+  if (isInRespiteTime(previousCase)) {
+    storeDeferredRespiteShift(caseId, caseData, ceiResult.caseSnapshot, previousCase, historyCtx);
+    run(
+      `UPDATE cases SET case_status = $st, next_action = $na, next_action_date = $nad,
+       action_status = $as, updated_at = datetime('now') WHERE id = $id`,
+      {
+        $st: previousCase.case_status,
+        $na: previousCase.next_action,
+        $nad: previousCase.next_action_date,
+        $as: calcActionStatus(previousCase.next_action_date),
+        $id: caseId,
+      }
+    );
+    return { ok: true, cei: ceiResult.cei, segmentId: newSegmentId, deferred: true, respite: true };
+  }
 
   stepChangeStrategyOnSegmentShift(
     caseId,
     newSegmentId,
     caseData,
     ceiResult.caseSnapshot,
-    previousCase.strategy_id
+    previousCase,
+    historyCtx
   );
 
   return { ok: true, cei: ceiResult.cei, segmentId: newSegmentId, segmentChanged: true };
@@ -937,6 +1181,8 @@ function importCasesFromRows(rows, userName = 'ادمین') {
     throw new Error(`حداکثر ${MAX_ROWS} ردیف در هر فایل قابل پردازش است`);
   }
 
+  processDeferredCeiStrategyShifts();
+
   const minDpd = parseInt(getSetting('min_dpd', '61'), 10);
 
   const firstRow = rows[0] || {};
@@ -993,6 +1239,7 @@ function importCasesFromRows(rows, userName = 'ادمین') {
 
 module.exports = {
   importCasesFromRows,
+  processDeferredCeiStrategyShifts,
   HEADER_TO_FIELD,
   CANONICAL_EXCEL_HEADERS,
   REQUIRED_FIELD_LABELS,

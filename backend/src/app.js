@@ -13,6 +13,9 @@ const abTestsRouter = require('./routes/abTests');
 const negotiatorsRouter = require('./routes/negotiators');
 const gsheetRouter = require('./routes/gsheet');
 const bulkRoutes = require('./routes/bulk');
+const reportsRoutes = require('./routes/reports');
+const debtorsRoutes = require('./routes/debtors');
+const installmentsRoutes = require('./routes/installments');
 
 /**
  * ساخت و پیکربندی اپلیکیشن Express.
@@ -28,6 +31,7 @@ function createApp() {
   // مسیرهای API
   app.use('/api/health', healthRouter);
   app.use('/api/cases', casesRouter);
+  app.use('/api/cases', installmentsRoutes);
   app.use('/api/settings', settingsRouter);
   app.use('/api/cei-formulas', ceiRouter);
   app.use('/api/segments', segmentsRouter);
@@ -36,6 +40,8 @@ function createApp() {
   app.use('/api/negotiators', negotiatorsRouter);
   app.use('/api/gsheet', gsheetRouter);
   app.use('/api/bulk', bulkRoutes);
+  app.use('/api/reports', reportsRoutes);
+  app.use('/api/debtors', debtorsRoutes);
 
   // مدیریت 404
   app.use((req, res) => {

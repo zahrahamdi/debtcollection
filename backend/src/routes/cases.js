@@ -3,9 +3,48 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
-const { calcActionStatus, daysDiffFromToday } = require('../db/dateUtil');
+const {
+  calcActionStatus,
+  daysDiffFromToday,
+  nowDatetime,
+  nowJalaliDateTime,
+  jalaliDateToDatetime,
+  jalaliDateTimeToDatetime,
+  isTimeWithinAllowedWindow,
+  addMinutesFromNow,
+} = require('../db/dateUtil');
+const { sendSms, replacePlaceholders, NO_ANSWER_SMS_TEXT, PAYMENT_LINK_SMS_TEMPLATE } = require('../services/sms.service');
 
 const PAGE_SIZE = 100;
+
+// برچسب فارسی انواع اکشن استراتژی (برای نمایش اقدام بعدی)
+const STRATEGY_ACTION_LABELS = {
+  warning_sms: 'پیامک هشدار',
+  threatening_sms: 'پیامک تهدید',
+  warning_autocall: 'تماس خودکار هشدار',
+  threatening_autocall: 'تماس خودکار تهدید',
+  negotiator_call: 'تماس مذاکره‌کننده',
+};
+
+// اطلاعات مرحله تماس مذاکره‌کننده در استراتژی پرونده (بازه مجاز، wait، اکشن بعدی)
+function computeNegotiatorStage(strategyId) {
+  if (!strategyId) return null;
+  const actions = query(
+    'SELECT * FROM strategy_actions WHERE strategy_id = $sid ORDER BY seq ASC',
+    { $sid: strategyId }
+  );
+  const negIdx = actions.findIndex((a) => a.action_type === 'negotiator_call');
+  if (negIdx === -1) return null;
+  const neg = actions[negIdx];
+  const next = actions[negIdx + 1] || null;
+  return {
+    allowed_from: neg.allowed_from || null,
+    allowed_to: neg.allowed_to || null,
+    wait_minutes: neg.wait_minutes ?? 0,
+    next_action_type: next ? next.action_type : null,
+    next_action_label: next ? STRATEGY_ACTION_LABELS[next.action_type] || next.action_type : null,
+  };
+}
 
 const CASE_SEGMENT_STRATEGY_JOINS = `
       LEFT JOIN segments seg ON seg.id = c.segment_id
@@ -25,7 +64,7 @@ function enrichRow(row) {
 /**
  * GET /api/cases
  * لیست پرونده‌ها با فیلتر سرور و pagination.
- * Query params: debtor_name, national_code, credit_id, case_status,
+ * Query params: debtor_name, national_code, credit_id, credit_type, case_status,
  *               action_status, negotiator_name, page (default 1)
  */
 router.get('/', (req, res) => {
@@ -34,6 +73,7 @@ router.get('/', (req, res) => {
       debtor_name,
       national_code,
       credit_id,
+      credit_type,
       case_status,
       action_status,
       negotiator_name,
@@ -56,6 +96,10 @@ router.get('/', (req, res) => {
     if (credit_id) {
       conditions.push(`c.credit_id LIKE $credit_id`);
       params.$credit_id = `%${credit_id}%`;
+    }
+    if (credit_type) {
+      conditions.push(`c.credit_type = $credit_type`);
+      params.$credit_type = credit_type;
     }
     if (case_status) {
       conditions.push(`c.case_status = $case_status`);
@@ -160,7 +204,7 @@ router.get('/:id', (req, res) => {
     const caseRow = enrichRow(rows[0]);
 
     const actions = query(
-      `SELECT * FROM case_actions WHERE case_id = $id ORDER BY seq ASC`,
+      `SELECT * FROM case_actions WHERE case_id = $id ORDER BY id ASC`,
       { $id: id }
     );
 
@@ -192,6 +236,7 @@ router.get('/:id', (req, res) => {
         active_promise: activePromise,
         files,
         other_cases: otherCases,
+        negotiator_stage: computeNegotiatorStage(caseRow.strategy_id),
       },
     });
   } catch (err) {
@@ -203,18 +248,65 @@ router.get('/:id', (req, res) => {
 /**
  * GET /api/cases/:id/history
  * تاریخچه کامل تغییرات و اقدامات یک پرونده (Audit Trail).
+ * Query: operation, user_name, from_date (YYYY/MM/DD), to_date (YYYY/MM/DD)
  */
 router.get('/:id/history', (req, res) => {
   try {
     const id = Number(req.params.id);
-    const caseRows = query('SELECT id FROM cases WHERE id = $id', { $id: id });
-    if (caseRows.length === 0) return res.status(404).json({ error: 'پرونده یافت نشد' });
+    const { operation, user_name, from_date, to_date } = req.query;
 
-    const history = query(
-      `SELECT * FROM case_history WHERE case_id = $id ORDER BY id DESC`,
+    const caseRows = query(
+      `SELECT c.id, c.credit_id, (d.first_name || ' ' || d.last_name) AS debtor_name
+       FROM cases c
+       LEFT JOIN debtors d ON d.id = c.debtor_id
+       WHERE c.id = $id`,
       { $id: id }
     );
-    res.json({ data: history });
+    if (caseRows.length === 0) return res.status(404).json({ error: 'پرونده یافت نشد' });
+
+    const conditions = ['h.case_id = $id'];
+    const params = { $id: id };
+
+    if (operation) {
+      conditions.push('h.operation = $operation');
+      params.$operation = operation;
+    }
+    if (user_name) {
+      conditions.push('h.user_name LIKE $user_name');
+      params.$user_name = `%${user_name}%`;
+    }
+    if (from_date) {
+      const fromDt = jalaliDateToDatetime(String(from_date).trim());
+      if (fromDt) {
+        conditions.push('h.created_at >= $from_date');
+        params.$from_date = fromDt;
+      }
+    }
+    if (to_date) {
+      const toDt = jalaliDateToDatetime(String(to_date).trim());
+      if (toDt) {
+        conditions.push('h.created_at <= $to_date');
+        params.$to_date = toDt.replace(' 00:00:00', ' 23:59:59');
+      }
+    }
+
+    const history = query(
+      `SELECT
+         h.*,
+         c.credit_id,
+         (d.first_name || ' ' || d.last_name) AS debtor_name
+       FROM case_history h
+       JOIN cases c ON c.id = h.case_id
+       LEFT JOIN debtors d ON d.id = h.debtor_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY h.created_at DESC, h.id DESC`,
+      params
+    );
+
+    res.json({
+      data: history,
+      case: caseRows[0],
+    });
   } catch (err) {
     console.error('[GET /api/cases/:id/history]', err);
     res.status(500).json({ error: 'خطا در دریافت تاریخچه پرونده' });
@@ -286,10 +378,18 @@ router.post('/:id/assign', (req, res) => {
         { $n: negotiator_id, $id: id }
       );
     } else {
+      const assignNow = nowDatetime();
+      const assignActionStatus = calcActionStatus(assignNow);
       run(
         `UPDATE cases SET assigned_negotiator_id = $n, case_status = 'pending_negotiator_call',
-         updated_at = datetime('now') WHERE id = $id`,
-        { $n: negotiator_id, $id: id }
+         next_action = $na, next_action_date = $nad, action_status = $as, updated_at = datetime('now') WHERE id = $id`,
+        {
+          $n: negotiator_id,
+          $id: id,
+          $na: 'تماس مذاکره‌کننده',
+          $nad: assignNow,
+          $as: assignActionStatus,
+        }
       );
     }
 
@@ -308,7 +408,9 @@ router.post('/:id/assign', (req, res) => {
         $status: updated.case_status,
         $na: updated.next_action,
         $nad: updated.next_action_date,
-        $details: `مذاکره‌کننده: ${neg.name}`,
+        $details: isReassign
+          ? `مذاکره‌کننده: ${neg.name}`
+          : `مذاکره‌کننده: ${neg.name} — نوبت تماس از ${updated.next_action_date}`,
       }
     );
 
@@ -331,20 +433,32 @@ router.post('/:id/assign', (req, res) => {
  * ثبت خروجی تماس مذاکره‌کننده.
  * body: { call_status, no_payment_reason, payment_decision, promised_date,
  *         promised_amount, next_call_date, description, refer_to_legal,
- *         call_date, user_name }
+ *         send_payment_link, call_date, user_name }
  */
-router.post('/:id/call-outcome', (req, res) => {
+router.post('/:id/call-outcome', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body || {};
 
-    const caseRows = query('SELECT * FROM cases WHERE id = $id', { $id: id });
+    const caseRows = query(
+      `SELECT c.*, d.first_name, d.last_name, d.mobile
+       FROM cases c
+       JOIN debtors d ON d.id = c.debtor_id
+       WHERE c.id = $id`,
+      { $id: id }
+    );
     if (caseRows.length === 0) return res.status(404).json({ error: 'پرونده یافت نشد' });
     const c = caseRows[0];
 
     if (!b.call_status) return res.status(400).json({ error: 'وضعیت تماس اجباری است' });
+    const callDuration = Number(b.call_duration);
+    if (!callDuration || callDuration <= 0) {
+      return res.status(400).json({ error: 'مدت تماس به دقیقه اجباری است' });
+    }
 
     const willPay = b.payment_decision === 'دارد';
+    const userName = b.user_name || 'مذاکره‌کننده';
+    const debtorName = `${c.first_name || ''} ${c.last_name || ''}`.trim();
 
     if (willPay) {
       if (!b.promised_date || b.promised_amount === undefined || b.promised_amount === '') {
@@ -356,7 +470,6 @@ router.post('/:id/call-outcome', (req, res) => {
           .json({ error: 'مبلغ تعهد نباید بیشتر از مطالبات پرونده باشد' });
       }
 
-      // اعتبارسنجی سقف تاریخ Promise to Pay از تنظیمات
       const settingRow = query(
         `SELECT value FROM settings WHERE key = 'promise_to_pay_max_days'`
       );
@@ -379,53 +492,87 @@ router.post('/:id/call-outcome', (req, res) => {
     const isDeath = b.no_payment_reason === 'فوت کاربر';
     const newCallCount = (c.call_count || 0) + 1;
 
-    // تعیین وضعیت جدید و تاریخ اقدام بعدی
+    const stage = computeNegotiatorStage(c.strategy_id) || {};
+    const allowedFrom = stage.allowed_from || '09:00';
+    const allowedTo = stage.allowed_to || '18:00';
+    const waitMinutes = Number(stage.wait_minutes) || 0;
+    const nextActionLabelAfterCall = stage.next_action_label || 'شکست استراتژی';
+    const isLastCall = Boolean(c.max_call_count) && newCallCount >= Number(c.max_call_count);
+
     let newStatus = 'in_negotiation';
+    let nextAction = c.next_action;
     let nextActionDate = c.next_action_date;
+    let clearStrategy = false;
 
     if (isDeath) {
       newStatus = 'burned';
+      nextAction = null;
       nextActionDate = null;
+      clearStrategy = true;
     } else if (b.refer_to_legal) {
       newStatus = 'pending_legal_assignment';
+      nextAction = 'تخصیص به حقوقی';
       nextActionDate = null;
-    } else {
-      nextActionDate = willPay ? b.promised_date : (b.next_call_date || null);
-      // رسیدن به حداکثر تماس و نبود تعهد پرداخت → ارجاع خودکار به حقوقی
-      if (!willPay && c.max_call_count && newCallCount >= c.max_call_count) {
-        newStatus = 'pending_legal_assignment';
-        nextActionDate = null;
+    } else if (willPay) {
+      // تصمیم به پرداخت: نوبت بعدی = تاریخ تعهد + ساعت انتخابی (باید در بازه مجاز باشد)
+      if (!b.next_call_time) {
+        return res.status(400).json({ error: 'ساعت تماس بعدی اجباری است' });
       }
+      if (!isTimeWithinAllowedWindow(b.next_call_time, allowedFrom, allowedTo)) {
+        return res
+          .status(400)
+          .json({ error: `ساعت تماس بعدی باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد` });
+      }
+      const combined = jalaliDateTimeToDatetime(b.next_call_date || b.promised_date, b.next_call_time);
+      if (!combined) return res.status(400).json({ error: 'تاریخ/ساعت تماس بعدی نامعتبر است' });
+      nextActionDate = combined;
+      nextAction = 'تماس مذاکره‌کننده';
+    } else if (isLastCall) {
+      // آخرین تماس: next_action_date = الان + wait اکشن جاری؛ تصمیم بعدی توسط موتور استراتژی
+      nextActionDate = addMinutesFromNow(waitMinutes);
+      nextAction = nextActionLabelAfterCall;
+    } else {
+      // تماس غیرآخر (ناسزا/عدم پرداخت/پاسخگو نبود): نیازمند تاریخ و ساعت تماس بعدی
+      if (!b.next_call_date || !b.next_call_time) {
+        return res.status(400).json({ error: 'تاریخ و ساعت تماس بعدی اجباری است' });
+      }
+      if (!isTimeWithinAllowedWindow(b.next_call_time, allowedFrom, allowedTo)) {
+        return res
+          .status(400)
+          .json({ error: `ساعت تماس بعدی باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد` });
+      }
+      const combined = jalaliDateTimeToDatetime(b.next_call_date, b.next_call_time);
+      if (!combined) return res.status(400).json({ error: 'تاریخ/ساعت تماس بعدی نامعتبر است' });
+      nextActionDate = combined;
+      nextAction = 'تماس مذاکره‌کننده';
     }
 
-    // هزینه تماس مذاکره‌کننده = حقوق ساعتی × (میانگین مدت تماس / ۶۰)
+    // رشته جلالی «تاریخ ساعت» تماس بعدی (برای ثبت در تاریخچه و case_actions)
+    const scheduledNextCall =
+      !isDeath && !b.refer_to_legal && Boolean(b.next_call_date) && Boolean(b.next_call_time) && (willPay || !isLastCall);
+    const nextCallJalali = scheduledNextCall ? `${b.next_call_date} ${b.next_call_time}` : null;
+
     let cost = 0;
-    if (c.assigned_negotiator_id && c.strategy_id) {
+    if (c.assigned_negotiator_id) {
       const neg = query('SELECT hourly_wage FROM negotiators WHERE id = $n', {
         $n: c.assigned_negotiator_id,
       })[0];
-      const act = query(
-        `SELECT avg_call_duration FROM strategy_actions
-         WHERE strategy_id = $s AND action_type = 'negotiator_call'
-         ORDER BY seq ASC LIMIT 1`,
-        { $s: c.strategy_id }
-      )[0];
-      if (neg && act && act.avg_call_duration) {
-        cost = Math.round((neg.hourly_wage * act.avg_call_duration) / 60);
+      if (neg?.hourly_wage) {
+        cost = Math.round((neg.hourly_wage * callDuration) / 60);
       }
     }
 
-    // ساخت متن خلاصه نتیجه
     const parts = [`وضعیت تماس: ${b.call_status}`];
     if (b.no_payment_reason) parts.push(`دلیل عدم پرداخت: ${b.no_payment_reason}`);
     if (b.payment_decision) parts.push(`تصمیم به پرداخت: ${b.payment_decision}`);
     if (willPay) parts.push(`تعهد: ${b.promised_amount} ریال در ${b.promised_date}`);
-    if (b.next_call_date) parts.push(`تماس بعدی: ${b.next_call_date}`);
+    if (nextCallJalali) parts.push(`تماس بعدی: ${nextCallJalali}`);
+    if (!isDeath && !b.refer_to_legal && isLastCall)
+      parts.push(`آخرین تماس — اقدام بعدی: ${nextActionLabelAfterCall}`);
     if (b.description) parts.push(`توضیحات: ${b.description}`);
     if (b.refer_to_legal) parts.push('ارجاع به حقوقی');
     const resultText = parts.join(' · ');
 
-    // ثبت در سابقه اقدام‌ها
     const maxSeq = query(
       'SELECT COALESCE(MAX(seq),0) AS m FROM case_actions WHERE case_id = $id',
       { $id: id }
@@ -439,35 +586,39 @@ router.post('/:id/call-outcome', (req, res) => {
         $cid: id,
         $seq: maxSeq + 1,
         $res: resultText,
-        $date: b.call_date || null,
+        $date: nowJalaliDateTime(),
         $cost: cost,
         $cs: b.call_status,
-        $ncd: b.next_call_date || null,
+        $ncd: nextCallJalali,
       }
     );
 
-    // به‌روزرسانی پرونده
     run(
       `UPDATE cases SET
         call_count = $cc,
         case_status = $st,
+        next_action = $na,
         next_action_date = $nad,
+        action_status = $as,
         last_action = 'تماس تلفنی مذاکره‌کننده',
         last_action_date = $cd,
         case_cost = case_cost + $cost,
+        strategy_id = CASE WHEN $clear = 1 THEN NULL ELSE strategy_id END,
         updated_at = datetime('now')
        WHERE id = $id`,
       {
         $cc: newCallCount,
         $st: newStatus,
+        $na: nextAction,
         $nad: nextActionDate,
+        $as: calcActionStatus(nextActionDate),
         $cd: b.call_date || null,
         $cost: cost,
+        $clear: clearStrategy ? 1 : 0,
         $id: id,
       }
     );
 
-    // ثبت تعهد پرداخت
     if (willPay) {
       run(
         `INSERT INTO promises (case_id, promised_date, amount, status)
@@ -476,17 +627,84 @@ router.post('/:id/call-outcome', (req, res) => {
       );
     }
 
-    // ثبت خودکار پیامک عدم پاسخگویی در تاریخچه
-    if (b.call_status === 'پاسخگو نبود' && !b.refer_to_legal) {
+    if (b.call_status === 'پاسخگو نبود' && !b.refer_to_legal && !isDeath) {
+      await sendSms(c.mobile, NO_ANSWER_SMS_TEXT);
       run(
         `INSERT INTO case_history
           (case_id, debtor_id, user_name, operation, case_status, details)
-         VALUES ($id, $did, 'سیستم', 'ارسال پیامک عدم پاسخگویی', $st, 'پیامک خودکار عدم پاسخگویی ارسال شد')`,
-        { $id: id, $did: c.debtor_id, $st: newStatus }
+         VALUES ($id, $did, 'سیستم', 'ارسال پیامک عدم پاسخگویی', $st, $det)`,
+        { $id: id, $did: c.debtor_id, $st: newStatus, $det: NO_ANSWER_SMS_TEXT }
       );
     }
 
-    // ثبت اصلی در تاریخچه
+    if (b.send_payment_link) {
+      const linkText = replacePlaceholders(PAYMENT_LINK_SMS_TEMPLATE, {
+        userName: debtorName,
+        claimsAmount: c.claims_amount,
+      });
+      await sendSms(c.mobile, linkText);
+      run(
+        `INSERT INTO case_history
+          (case_id, debtor_id, user_name, operation, case_status, details)
+         VALUES ($id, $did, $user, 'ارسال لینک پرداخت', $st, $det)`,
+        {
+          $id: id,
+          $did: c.debtor_id,
+          $user: userName,
+          $st: newStatus,
+          $det: linkText,
+        }
+      );
+    }
+
+    if (isDeath) {
+      run(
+        `INSERT INTO case_history
+          (case_id, debtor_id, user_name, operation, case_status, details)
+         VALUES ($id, $did, $user, 'سوخت پرونده — فوت کاربر', $st, $det)`,
+        {
+          $id: id,
+          $did: c.debtor_id,
+          $user: userName,
+          $st: newStatus,
+          $det: 'پرونده به دلیل فوت کاربر سوخت شد و استراتژی متوقف گردید.',
+        }
+      );
+    }
+
+    if (b.refer_to_legal) {
+      run(
+        `INSERT INTO case_history
+          (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
+         VALUES ($id, $did, $user, 'ارجاع به حقوقی توسط مذاکره‌کننده', $st, $na, $nad, $det)`,
+        {
+          $id: id,
+          $did: c.debtor_id,
+          $user: userName,
+          $st: newStatus,
+          $na: nextAction,
+          $nad: nextActionDate,
+          $det: 'ارجاع به حقوقی توسط مذاکره‌کننده',
+        }
+      );
+    }
+
+    const historyDetails = JSON.stringify({
+      call_status: b.call_status,
+      no_payment_reason: b.no_payment_reason || null,
+      payment_decision: b.payment_decision || null,
+      promised_date: willPay ? b.promised_date : null,
+      promised_amount: willPay ? Number(b.promised_amount) : null,
+      call_duration: callDuration,
+      call_cost: cost,
+      next_call_date: nextCallJalali,
+      next_call_time: !isDeath && !b.refer_to_legal ? b.next_call_time || null : null,
+      is_last_call: isLastCall,
+      next_action: isLastCall ? nextActionLabelAfterCall : nextAction,
+      description: b.description || null,
+      refer_to_legal: Boolean(b.refer_to_legal),
+    });
+
     run(
       `INSERT INTO case_history
         (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
@@ -494,11 +712,11 @@ router.post('/:id/call-outcome', (req, res) => {
       {
         $id: id,
         $did: c.debtor_id,
-        $user: b.user_name || 'مذاکره‌کننده',
+        $user: userName,
         $st: newStatus,
-        $na: c.next_action,
+        $na: nextAction,
         $nad: nextActionDate,
-        $details: resultText,
+        $details: historyDetails,
       }
     );
 

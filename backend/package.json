@@ -8,6 +8,9 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/db/seed.js",
     "delete-debtor": "node scripts/delete-debtor-by-mobile.js",
+    "seed-zahra": "node scripts/seed-zahra-hamdi-cases.js",
+    "clear-ab-tests": "node scripts/clear-ab-tests.js",
+    "add-payment-test": "node scripts/add-payment-test-cases.js",
     "delete-all-except": "node scripts/delete-all-except-mobile.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

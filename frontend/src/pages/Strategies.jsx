@@ -143,6 +143,7 @@ export default function Strategies() {
     'سگمنت',
     'نوع اعتبار',
     'تعداد پرونده فعال',
+    'نرخ موفقیت',
     'سناریو A/B Test',
     'نرخ توزیع',
     'ایجادکننده',
@@ -150,6 +151,9 @@ export default function Strategies() {
     'آخرین به‌روزرسانی',
     'عملیات',
   ]
+
+  const formatSuccessRate = (rate) =>
+    rate == null || rate === '' ? '—' : `${toFaDigits(Number(rate).toFixed(1))}٪`
 
   return (
     <div className="space-y-4">
@@ -234,6 +238,7 @@ export default function Strategies() {
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{orDash(s.segment_title)}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{creditTypeLabel(s.credit_type)}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-700">{toFaDigits(s.active_cases_count)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{formatSuccessRate(s.success_rate)}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{orDash(s.ab_name)}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">
                     {s.ab_ratio != null ? `${toFaDigits(s.ab_ratio)}٪` : '—'}
@@ -362,7 +367,6 @@ export default function Strategies() {
       <AbTestModal
         open={abModalOpen}
         onClose={() => setAbModalOpen(false)}
-        segments={segments}
         strategies={rows}
         onSaved={load}
       />

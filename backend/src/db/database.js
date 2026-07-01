@@ -76,6 +76,15 @@ function migrateSchema(database) {
     );
     console.log('[db] migration: wait_days → wait_minutes (مقدار × ۱۴۴۰)');
   }
+
+  const casesInfo = database.exec('PRAGMA table_info(cases)');
+  if (casesInfo.length) {
+    const caseCols = casesInfo[0].values.map((row) => row[1]);
+    if (!caseCols.includes('cei_boost')) {
+      database.run('ALTER TABLE cases ADD COLUMN cei_boost REAL NOT NULL DEFAULT 0');
+      console.log('[db] migration: cases.cei_boost added');
+    }
+  }
 }
 
 /**

@@ -9,7 +9,6 @@ export const CASE_STATUS = {
   pending_autocall_result: { label: 'در انتظار نتیجه تماس خودکار', tone: 'blue' },
   pending_negotiator_assignment: { label: 'در انتظار تخصیص به مذاکره‌کننده', tone: 'amber' },
   pending_negotiator_call: { label: 'در انتظار تماس مذاکره‌کننده', tone: 'amber' },
-  pending_negotiator_result: { label: 'در انتظار نتیجه تماس مذاکره‌کننده', tone: 'amber' },
   in_negotiation: { label: 'در انتظار نتیجه تماس مذاکره‌کننده', tone: 'amber' },
   pending_legal_assignment: { label: 'در انتظار تخصیص به حقوقی', tone: 'red' },
   paid: { label: 'پرداخت شده', tone: 'green' },
@@ -38,6 +37,22 @@ export const GUARANTEE_TYPE = {
   promissory_note: 'سفته / e-note',
 }
 
+// وضعیت پرداخت قسط
+export const PAYMENT_STATUS = {
+  unpaid: { label: 'پرداخت نشده', tone: 'red' },
+  paid: { label: 'پرداخت شده', tone: 'green' },
+}
+
+// وضعیت قسط — مقادیر رایج فیلتر
+export const INSTALLMENT_STATUSES = [
+  'سررسید نشده',
+  'سررسید شده',
+  'سررسید گذشته',
+  'معوق',
+  'مشکوک‌الوصول',
+  'تسویه شده',
+]
+
 // کلاس بدهی — مقادیر مجاز فیلتر (بخش ۳.۱ PRD)
 export const DEBT_CLASSES = [
   'سررسید نشده',
@@ -55,7 +70,9 @@ export const ACTION_TYPE = {
   threatening_sms: { label: 'پیامک تهدید', icon: 'sms' },
   warning_autocall: { label: 'تماس خودکار هشدار', icon: 'autocall' },
   threatening_autocall: { label: 'تماس خودکار تهدید', icon: 'autocall' },
-  negotiator_call: { label: 'تماس تلفنی مذاکره‌کننده', icon: 'call' },
+  payment_full: { label: 'پرداخت کامل', icon: 'payment' },
+  payment_partial: { label: 'پرداخت جزئی', icon: 'payment' },
+  negotiator_call: { label: 'تماس مذاکره‌کننده', icon: 'call' },
 }
 
 // نوع همکاری مذاکره‌کننده (Epic 2)
@@ -95,5 +112,39 @@ export const creditTypeLabel = (key) => CREDIT_TYPE[key] ?? key ?? '—'
 export const guaranteeTypeLabel = (key) => GUARANTEE_TYPE[key] ?? key ?? '—'
 export const actionTypeLabel = (key) => ACTION_TYPE[key]?.label ?? key ?? '—'
 export const promiseStatusLabel = (key) => PROMISE_STATUS[key] ?? key ?? '—'
+export const paymentStatusLabel = (key) => PAYMENT_STATUS[key]?.label ?? key ?? '—'
+export const paymentStatusTone = (key) => PAYMENT_STATUS[key]?.tone ?? 'gray'
 export const cooperationTypeLabel = (key) => COOPERATION_TYPE[key] ?? key ?? '—'
 export const negotiatorStatusLabel = (key) => NEGOTIATOR_STATUS[key] ?? key ?? '—'
+
+// عملیات‌های ثبت‌شونده در تاریخچه پرونده (Audit Trail)
+export const HISTORY_OPERATIONS = [
+  'ایجاد پرونده',
+  'محاسبه CEI',
+  'تعیین سگمنت',
+  'تخصیص استراتژی',
+  'به‌روزرسانی CEI و استراتژی',
+  'تأخیر تغییر استراتژی (Respite Time)',
+  'انتظار پایان استراتژی فعلی',
+  'اعمال تغییر استراتژی معوق',
+  'به‌روزرسانی اطلاعات پرونده',
+  'به‌روزرسانی اطلاعات مالی پرونده',
+  'اجرای پیامک',
+  'اجرای پیامک (شبیه‌سازی)',
+  'اجرای تماس خودکار',
+  'ارجاع به مذاکره‌کننده',
+  'پایان استراتژی',
+  'شکست استراتژی',
+  'تخصیص به مذاکره‌کننده',
+  'تخصیص مجدد',
+  'ثبت خروجی تماس',
+  'ارسال پیامک عدم پاسخگویی',
+  'ارسال لینک پرداخت',
+  'سوخت پرونده — فوت کاربر',
+  'ارجاع به حقوقی توسط مذاکره‌کننده',
+  'ارجاع خودکار به حقوقی پس از رسیدن به حداکثر تماس',
+  'پرداخت کامل بدهی',
+  'پرداخت جزئی بدهی',
+  'ادامه استراتژی پس از پرداخت جزئی',
+  'تغییر استراتژی پس از پرداخت جزئی',
+]

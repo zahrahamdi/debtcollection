@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import Modal from '../modal/Modal'
 import StrategyActionsBuilder from './StrategyActionsBuilder'
 import { createAbTest } from '../../api/abTests'
+import { fetchSegments } from '../../api/segments'
 import { toFaDigits } from '../../utils/format'
+import { creditTypeLabel } from '../../utils/constants'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
@@ -13,22 +15,132 @@ const emptyForm = () => ({
   name: '',
   credit_type: 'loan',
   segment_id: '',
+  strategy_a_mode: 'new',
+  strategy_a_id: '',
   title_a: '',
   actions_a: [],
   ratio_a: 50,
+  strategy_b_mode: 'existing',
+  strategy_b_id: '',
   title_b: '',
   actions_b: [],
   ratio_b: 50,
 })
 
-export default function AbTestModal({ open, onClose, segments, strategies, onSaved }) {
+function StrategySection({
+  label,
+  mode,
+  onModeChange,
+  strategyId,
+  onStrategyIdChange,
+  title,
+  onTitleChange,
+  actions,
+  onActionsChange,
+  ratio,
+  onRatioChange,
+  strategyOptions,
+  segmentSelected,
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h4 className="text-sm font-bold text-slate-700">{label}</h4>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400">نرخ توزیع (٪)</span>
+          <input
+            type="number"
+            dir="ltr"
+            min="0"
+            max="100"
+            className={`${inputClass} w-20 text-left`}
+            value={ratio}
+            onChange={(e) => onRatioChange(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-4 text-sm text-slate-600">
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="radio"
+            name={`${label}-mode`}
+            checked={mode === 'existing'}
+            onChange={() => onModeChange('existing')}
+          />
+          انتخاب از لیست استراتژی‌های موجود
+        </label>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="radio"
+            name={`${label}-mode`}
+            checked={mode === 'new'}
+            onChange={() => onModeChange('new')}
+          />
+          تعریف استراتژی جدید همینجا
+        </label>
+      </div>
+
+      {mode === 'existing' ? (
+        <div>
+          <label className={labelClass}>استراتژی</label>
+          <select
+            className={inputClass}
+            value={strategyId}
+            onChange={(e) => onStrategyIdChange(e.target.value)}
+            disabled={!segmentSelected}
+          >
+            <option value="">انتخاب استراتژی</option>
+            {strategyOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title}
+              </option>
+            ))}
+          </select>
+          {segmentSelected && strategyOptions.length === 0 && (
+            <p className="mt-1 text-[11px] text-amber-600">
+              استراتژی‌ای برای این نوع اعتبار و سگمنت یافت نشد.
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          <label className={labelClass}>عنوان استراتژی</label>
+          <input
+            className={`${inputClass} mb-3`}
+            value={title}
+            onChange={(e) => onTitleChange(e.target.value)}
+            placeholder={`عنوان ${label}`}
+          />
+          <StrategyActionsBuilder actions={actions} onChange={onActionsChange} />
+        </>
+      )}
+    </div>
+  )
+}
+
+export default function AbTestModal({ open, onClose, strategies, onSaved }) {
   const [form, setForm] = useState(emptyForm())
+  const [segments, setSegments] = useState({ loan: [], bnpl: [] })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // سگمنت‌های خالی (بدون استراتژی) — سناریو فقط روی این‌ها قابل تعریف است
-  const occupied = useMemo(() => new Set(strategies.map((s) => s.segment_id)), [strategies])
-  const segmentOptions = (segments[form.credit_type] ?? []).filter((seg) => !occupied.has(seg.id))
+  useEffect(() => {
+    if (!open) return
+    fetchSegments()
+      .then(setSegments)
+      .catch(() => toast.error('خطا در دریافت سگمنت‌ها'))
+  }, [open])
+
+  const segmentOptions = segments[form.credit_type] ?? []
+
+  const strategyOptions = useMemo(() => {
+    if (!form.segment_id) return []
+    return strategies.filter(
+      (s) =>
+        s.credit_type === form.credit_type && Number(s.segment_id) === Number(form.segment_id)
+    )
+  }, [strategies, form.credit_type, form.segment_id])
 
   const ratioSum = Number(form.ratio_a || 0) + Number(form.ratio_b || 0)
   const set = (patch) => setForm((f) => ({ ...f, ...patch }))
@@ -37,17 +149,55 @@ export default function AbTestModal({ open, onClose, segments, strategies, onSav
     setForm(emptyForm())
     setError('')
   }
+
   const close = () => {
     if (saving) return
     reset()
     onClose()
   }
 
+  const validateExistingStrategy = (mode, strategyId, sideLabel) => {
+    if (mode !== 'existing') return null
+    if (!strategyId) return `${sideLabel}: انتخاب استراتژی از لیست اجباری است`
+    const s = strategies.find((row) => Number(row.id) === Number(strategyId))
+    if (!s) return `${sideLabel}: استراتژی یافت نشد`
+    if (s.credit_type !== form.credit_type) {
+      return `${sideLabel}: نوع اعتبار استراتژی با نوع اعتبار انتخاب‌شده هم‌خوانی ندارد`
+    }
+    if (Number(s.segment_id) !== Number(form.segment_id)) {
+      return `${sideLabel}: سگمنت استراتژی با سگمنت انتخاب‌شده هم‌خوانی ندارد`
+    }
+    return null
+  }
+
   const save = async () => {
     if (!form.name.trim()) return setError('نام سناریو اجباری است.')
     if (!form.segment_id) return setError('انتخاب سگمنت اجباری است.')
-    if (!form.title_a.trim() || !form.title_b.trim())
-      return setError('عنوان هر دو استراتژی اجباری است.')
+
+    if (form.strategy_a_mode === 'existing' && form.strategy_b_mode === 'existing') {
+      return setError('نمی‌توان هر دو استراتژی را از لیست انتخاب کرد. حداقل یکی باید جدید تعریف شود.')
+    }
+
+    const errA = validateExistingStrategy(form.strategy_a_mode, form.strategy_a_id, 'استراتژی A')
+    if (errA) return setError(errA)
+    const errB = validateExistingStrategy(form.strategy_b_mode, form.strategy_b_id, 'استراتژی B')
+    if (errB) return setError(errB)
+
+    if (form.strategy_a_mode === 'new' && !form.title_a.trim()) {
+      return setError('عنوان استراتژی A اجباری است.')
+    }
+    if (form.strategy_b_mode === 'new' && !form.title_b.trim()) {
+      return setError('عنوان استراتژی B اجباری است.')
+    }
+
+    if (
+      form.strategy_a_mode === 'existing' &&
+      form.strategy_b_mode === 'existing' &&
+      form.strategy_a_id === form.strategy_b_id
+    ) {
+      return setError('دو استراتژی یکسان نمی‌توانند انتخاب شوند.')
+    }
+
     if (ratioSum !== 100) return setError('مجموع نرخ توزیع باید ۱۰۰٪ باشد.')
 
     setSaving(true)
@@ -57,12 +207,24 @@ export default function AbTestModal({ open, onClose, segments, strategies, onSav
         name: form.name.trim(),
         credit_type: form.credit_type,
         segment_id: Number(form.segment_id),
-        strategy_a: { title: form.title_a.trim(), actions: form.actions_a },
+        strategy_a: {
+          source: form.strategy_a_mode,
+          strategy_id:
+            form.strategy_a_mode === 'existing' ? Number(form.strategy_a_id) : undefined,
+          title: form.strategy_a_mode === 'new' ? form.title_a.trim() : undefined,
+          actions: form.strategy_a_mode === 'new' ? form.actions_a : undefined,
+        },
         ratio_a: Number(form.ratio_a),
-        strategy_b: { title: form.title_b.trim(), actions: form.actions_b },
+        strategy_b: {
+          source: form.strategy_b_mode,
+          strategy_id:
+            form.strategy_b_mode === 'existing' ? Number(form.strategy_b_id) : undefined,
+          title: form.strategy_b_mode === 'new' ? form.title_b.trim() : undefined,
+          actions: form.strategy_b_mode === 'new' ? form.actions_b : undefined,
+        },
         ratio_b: Number(form.ratio_b),
       })
-      toast.success('سناریوی A/B Test و دو استراتژی آن ایجاد شد.')
+      toast.success('سناریوی A/B Test ایجاد شد.')
       reset()
       onSaved()
       onClose()
@@ -117,89 +279,75 @@ export default function AbTestModal({ open, onClose, segments, strategies, onSav
             <select
               className={inputClass}
               value={form.credit_type}
-              onChange={(e) => set({ credit_type: e.target.value, segment_id: '' })}
+              onChange={(e) =>
+                set({
+                  credit_type: e.target.value,
+                  segment_id: '',
+                  strategy_a_id: '',
+                  strategy_b_id: '',
+                })
+              }
             >
               <option value="loan">وام</option>
               <option value="bnpl">BNPL</option>
             </select>
           </div>
           <div>
-            <label className={labelClass}>سگمنت (بدون استراتژی)</label>
+            <label className={labelClass}>سگمنت</label>
             <select
               className={inputClass}
               value={form.segment_id}
-              onChange={(e) => set({ segment_id: e.target.value })}
+              onChange={(e) =>
+                set({ segment_id: e.target.value, strategy_a_id: '', strategy_b_id: '' })
+              }
             >
               <option value="">انتخاب سگمنت</option>
               {segmentOptions.map((seg) => (
                 <option key={seg.id} value={seg.id}>
-                  {seg.title}
+                  {seg.title} ({creditTypeLabel(seg.credit_type)})
                 </option>
               ))}
             </select>
             {segmentOptions.length === 0 && (
               <p className="mt-1 text-[11px] text-amber-600">
-                سگمنت خالی برای این نوع اعتبار وجود ندارد.
+                سگمنتی برای {creditTypeLabel(form.credit_type)} یافت نشد.
               </p>
             )}
           </div>
         </div>
 
-        {/* استراتژی اول */}
-        <div className="rounded-2xl border border-slate-200 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h4 className="text-sm font-bold text-slate-700">استراتژی اول</h4>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">نرخ توزیع (٪)</span>
-              <input
-                type="number"
-                dir="ltr"
-                min="0"
-                max="100"
-                className={`${inputClass} w-20 text-left`}
-                value={form.ratio_a}
-                onChange={(e) => set({ ratio_a: e.target.value })}
-              />
-            </div>
-          </div>
-          <label className={labelClass}>عنوان استراتژی</label>
-          <input
-            className={`${inputClass} mb-3`}
-            value={form.title_a}
-            onChange={(e) => set({ title_a: e.target.value })}
-            placeholder="عنوان استراتژی اول"
-          />
-          <StrategyActionsBuilder actions={form.actions_a} onChange={(a) => set({ actions_a: a })} />
-        </div>
+        <StrategySection
+          label="استراتژی A"
+          mode={form.strategy_a_mode}
+          onModeChange={(m) => set({ strategy_a_mode: m, strategy_a_id: '' })}
+          strategyId={form.strategy_a_id}
+          onStrategyIdChange={(v) => set({ strategy_a_id: v })}
+          title={form.title_a}
+          onTitleChange={(v) => set({ title_a: v })}
+          actions={form.actions_a}
+          onActionsChange={(a) => set({ actions_a: a })}
+          ratio={form.ratio_a}
+          onRatioChange={(v) => set({ ratio_a: v })}
+          strategyOptions={strategyOptions}
+          segmentSelected={Boolean(form.segment_id)}
+        />
 
-        {/* استراتژی دوم */}
-        <div className="rounded-2xl border border-slate-200 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h4 className="text-sm font-bold text-slate-700">استراتژی دوم</h4>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">نرخ توزیع (٪)</span>
-              <input
-                type="number"
-                dir="ltr"
-                min="0"
-                max="100"
-                className={`${inputClass} w-20 text-left`}
-                value={form.ratio_b}
-                onChange={(e) => set({ ratio_b: e.target.value })}
-              />
-            </div>
-          </div>
-          <label className={labelClass}>عنوان استراتژی</label>
-          <input
-            className={`${inputClass} mb-3`}
-            value={form.title_b}
-            onChange={(e) => set({ title_b: e.target.value })}
-            placeholder="عنوان استراتژی دوم"
-          />
-          <StrategyActionsBuilder actions={form.actions_b} onChange={(a) => set({ actions_b: a })} />
-        </div>
+        <StrategySection
+          label="استراتژی B"
+          mode={form.strategy_b_mode}
+          onModeChange={(m) => set({ strategy_b_mode: m, strategy_b_id: '' })}
+          strategyId={form.strategy_b_id}
+          onStrategyIdChange={(v) => set({ strategy_b_id: v })}
+          title={form.title_b}
+          onTitleChange={(v) => set({ title_b: v })}
+          actions={form.actions_b}
+          onActionsChange={(a) => set({ actions_b: a })}
+          ratio={form.ratio_b}
+          onRatioChange={(v) => set({ ratio_b: v })}
+          strategyOptions={strategyOptions}
+          segmentSelected={Boolean(form.segment_id)}
+        />
 
-        {/* اندیکاتور مجموع نرخ */}
         <div
           className={[
             'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium',

@@ -37,6 +37,39 @@ function createStrategyWithActions(title, creditType, segmentId, createdBy, acti
   return lastInsertRowid;
 }
 
+function resolveStrategySide(side, sideLabel, creditType, segmentId, createdBy) {
+  const source = side?.source === 'existing' ? 'existing' : 'new';
+
+  if (source === 'existing') {
+    const id = Number(side.strategy_id);
+    if (!id) {
+      return { error: `${sideLabel}: انتخاب استراتژی از لیست اجباری است` };
+    }
+    const rows = query('SELECT * FROM strategies WHERE id = $id', { $id: id });
+    if (rows.length === 0) {
+      return { error: `${sideLabel}: استراتژی انتخاب‌شده یافت نشد` };
+    }
+    const s = rows[0];
+    if (s.credit_type !== creditType) {
+      return { error: `${sideLabel}: نوع اعتبار استراتژی با نوع اعتبار سناریو هم‌خوانی ندارد` };
+    }
+    if (Number(s.segment_id) !== Number(segmentId)) {
+      return { error: `${sideLabel}: سگمنت استراتژی با سگمنت انتخاب‌شده هم‌خوانی ندارد` };
+    }
+    return { id };
+  }
+
+  const title = (side?.title || '').trim();
+  if (!title) {
+    return { error: `${sideLabel}: عنوان استراتژی جدید اجباری است` };
+  }
+  const actErr = validateActions(side?.actions);
+  if (actErr) {
+    return { error: `${sideLabel}: ${actErr}` };
+  }
+  return { id: createStrategyWithActions(title, creditType, segmentId, createdBy, side?.actions) };
+}
+
 /**
  * GET /api/ab-tests
  * لیست سناریوها با عنوان سگمنت و عنوان استراتژی‌ها.
@@ -64,9 +97,7 @@ router.get('/', (req, res) => {
 
 /**
  * POST /api/ab-tests
- * ایجاد سناریو به همراه «دو استراتژی جدید» و اقدام‌هایشان (Story 12.3 + قانون جدید).
- * سگمنت باید خالی باشد؛ مجموع نرخ توزیع باید ۱۰۰٪ باشد (AC1).
- * body: { name, credit_type, segment_id, strategy_a:{title,actions}, ratio_a, strategy_b:{title,actions}, ratio_b, created_by }
+ * body: { name, credit_type, segment_id, strategy_a:{source,strategy_id?,title?,actions?}, ratio_a, strategy_b:{...}, ratio_b, created_by }
  */
 router.post('/', (req, res) => {
   try {
@@ -81,17 +112,19 @@ router.post('/', (req, res) => {
     const segErr = validateSegment(segment_id, credit_type);
     if (segErr) return res.status(400).json({ error: segErr });
 
-    // سگمنت باید خالی باشد (دو استراتژی سناریو تنها ساکنان سگمنت خواهند بود)
-    if (segmentStrategyCount(segment_id) > 0) {
+    const sourceA = strategy_a?.source === 'existing' ? 'existing' : 'new';
+    const sourceB = strategy_b?.source === 'existing' ? 'existing' : 'new';
+
+    if (sourceA === 'existing' && sourceB === 'existing') {
       return res.status(400).json({
-        error: 'این سگمنت قبلاً استراتژی دارد. سناریوی A/B فقط روی سگمنت بدون استراتژی قابل تعریف است.',
+        error: 'نمی‌توان هر دو استراتژی را از لیست انتخاب کرد. حداقل یکی باید جدید تعریف شود.',
       });
     }
 
-    const titleA = (strategy_a?.title || '').trim();
-    const titleB = (strategy_b?.title || '').trim();
-    if (!titleA || !titleB) {
-      return res.status(400).json({ error: 'عنوان هر دو استراتژی اجباری است' });
+    if (sourceA === 'new' && sourceB === 'new' && segmentStrategyCount(segment_id) > 0) {
+      return res.status(400).json({
+        error: 'برای تعریف دو استراتژی جدید، سگمنت انتخاب‌شده باید بدون استراتژی باشد.',
+      });
     }
 
     const ra = Number(ratio_a);
@@ -103,14 +136,17 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'مجموع نرخ توزیع دو استراتژی باید ۱۰۰٪ باشد' });
     }
 
-    const actErrA = validateActions(strategy_a?.actions);
-    if (actErrA) return res.status(400).json({ error: `استراتژی اول: ${actErrA}` });
-    const actErrB = validateActions(strategy_b?.actions);
-    if (actErrB) return res.status(400).json({ error: `استراتژی دوم: ${actErrB}` });
+    const resolvedA = resolveStrategySide(strategy_a, 'استراتژی A', credit_type, segment_id, created_by);
+    if (resolvedA.error) return res.status(400).json({ error: resolvedA.error });
+    const resolvedB = resolveStrategySide(strategy_b, 'استراتژی B', credit_type, segment_id, created_by);
+    if (resolvedB.error) return res.status(400).json({ error: resolvedB.error });
 
-    // ساخت دو استراتژی + اقدام‌ها
-    const aId = createStrategyWithActions(titleA, credit_type, segment_id, created_by, strategy_a?.actions);
-    const bId = createStrategyWithActions(titleB, credit_type, segment_id, created_by, strategy_b?.actions);
+    if (resolvedA.id === resolvedB.id) {
+      return res.status(400).json({ error: 'دو استراتژی یکسان نمی‌توانند انتخاب شوند' });
+    }
+
+    const aId = resolvedA.id;
+    const bId = resolvedB.id;
 
     const { lastInsertRowid } = run(
       `INSERT INTO ab_tests (name, credit_type, segment_id, strategy_a_id, ratio_a, strategy_b_id, ratio_b)

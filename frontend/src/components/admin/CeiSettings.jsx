@@ -209,6 +209,40 @@ export default function CeiSettings() {
       </div>
       <FormulaBox tab={tab} />
 
+      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
+        <h4 className="mb-3 text-sm font-bold text-slate-700">منطق شکست استراتژی</h4>
+        <p className="text-sm leading-7 text-slate-600">
+          وقتی استراتژی یک پرونده بدون پرداخت به پایان می‌رسد و پرونده در آخرین سگمنت نیست،
+          سیستم به صورت خودکار CEI پرونده را افزایش می‌دهد تا به سگمنت بالاتر منتقل شود.
+        </p>
+        <div className="mt-4 space-y-2 text-sm text-slate-600">
+          <p className="font-medium text-slate-700">فرمول محاسبه:</p>
+          <p dir="ltr" className="rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">
+            position_ratio = (CEI - min_current) / (max_current - min_current)
+          </p>
+          <p dir="ltr" className="rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">
+            CEI_target = min_next + position_ratio × (max_next - min_next)
+          </p>
+          <p className="text-xs text-slate-500">به فارسی:</p>
+          <p>موقعیت نسبی = (CEI فعلی − حداقل سگمنت) / (حداکثر سگمنت − حداقل سگمنت)</p>
+          <p>CEI هدف = حداقل سگمنت بعدی + موقعیت نسبی × (حداکثر سگمنت بعدی − حداقل سگمنت بعدی)</p>
+        </div>
+        <div className="mt-4 space-y-2 text-sm text-slate-600">
+          <p className="font-medium text-slate-700">مثال با سگمنت‌های ۰–۳۰ و ۳۰–۵۰:</p>
+          <p>پرونده با CEI = ۱۰ → موقعیت نسبی = ۰.۳۳ → CEI هدف = ۳۶.۶</p>
+          <p>پرونده با CEI = ۲۰ → موقعیت نسبی = ۰.۶۷ → CEI هدف = ۴۳.۴</p>
+          <p className="text-xs text-slate-500">
+            هر دو به سگمنت ۳۰–۵۰ منتقل می‌شوند و ترتیب نسبی حفظ می‌شود.
+          </p>
+        </div>
+        <ul className="mt-4 list-inside list-disc space-y-1 text-xs text-slate-500">
+          <li>پرداخت جزئی تأثیری روی boost ندارد</li>
+          <li>افزایش مطالبات تأثیری روی boost ندارد</li>
+          <li>boost هیچوقت کاهش نمی‌یابد</li>
+          <li>اگر پرونده در آخرین سگمنت باشد، مستقیم به حقوقی می‌رود</li>
+        </ul>
+      </div>
+
       {/* پارامترها */}
       <div className="mt-5 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-panel sm:grid-cols-2">
         {fields.map((fld) => (

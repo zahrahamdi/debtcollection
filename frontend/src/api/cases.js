@@ -18,10 +18,30 @@ export async function fetchCases(filters = {}, page = 1) {
   }
 }
 
-// دریافت تاریخچه کامل یک پرونده
-export async function fetchCaseHistory(id) {
-  const { data } = await client.get(`/cases/${id}/history`)
-  return data?.data ?? []
+// دریافت لیست اقساط یک پرونده با فیلترهای اختیاری
+export async function fetchCaseInstallments(caseId, filters = {}) {
+  const params = { ...filters }
+  Object.keys(params).forEach((k) => {
+    if (params[k] === '' || params[k] == null) delete params[k]
+  })
+  const { data } = await client.get(`/cases/${caseId}/installments`, { params })
+  return {
+    rows: data?.data ?? [],
+    caseInfo: data?.case ?? null,
+  }
+}
+
+// دریافت تاریخچه کامل یک پرونده با فیلترهای اختیاری
+export async function fetchCaseHistory(caseId, filters = {}) {
+  const params = { ...filters }
+  Object.keys(params).forEach((k) => {
+    if (params[k] === '' || params[k] == null) delete params[k]
+  })
+  const { data } = await client.get(`/cases/${caseId}/history`, { params })
+  return {
+    rows: data?.data ?? [],
+    caseInfo: data?.case ?? null,
+  }
 }
 
 // دریافت جزئیات کامل یک پرونده (برای ساید بار)

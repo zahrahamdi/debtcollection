@@ -37,8 +37,26 @@ function validateSegment(segmentId, creditType) {
   return null;
 }
 
+function strategySuccessRate(strategyId) {
+  const total = Number(
+    query('SELECT COUNT(*) AS c FROM cases WHERE strategy_id = $id', { $id: strategyId })[0]?.c ?? 0
+  );
+  if (total === 0) return null;
+  const paid = Number(
+    query(
+      `SELECT COUNT(*) AS c FROM cases WHERE strategy_id = $id AND case_status = 'paid'`,
+      { $id: strategyId }
+    )[0]?.c ?? 0
+  );
+  return Math.round((paid / total) * 1000) / 10;
+}
+
 function serialize(s) {
-  return { ...s, active_cases_count: activeCasesCount(s.id) };
+  return {
+    ...s,
+    active_cases_count: activeCasesCount(s.id),
+    success_rate: strategySuccessRate(s.id),
+  };
 }
 
 /**

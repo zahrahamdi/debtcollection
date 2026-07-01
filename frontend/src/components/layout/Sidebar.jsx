@@ -9,9 +9,7 @@ export default function Sidebar() {
     <aside className="flex h-full w-60 shrink-0 flex-col border-l border-slate-200 bg-white">
       {/* برند */}
       <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-lg font-bold text-white">
-          P
-        </div>
+        <img src="/dp-logo.svg" alt="دیجی‌پی" className="h-9 w-9 shrink-0" />
         <div className="leading-tight">
           <div className="text-sm font-bold text-slate-800">دیجی‌پی</div>
           <div className="text-xs text-slate-400">وصول مطالبات</div>

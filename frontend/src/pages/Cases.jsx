@@ -16,6 +16,7 @@ const emptyFilters = {
   debtor_name: '',
   national_code: '',
   credit_id: '',
+  credit_type: '',
   case_status: '',
   action_status: '',
   negotiator_name: '',
@@ -29,6 +30,7 @@ export default function Cases() {
   const [error, setError] = useState(null)
   const [filters, setFilters] = useState({
     ...emptyFilters,
+    national_code: searchParams.get('national_code') || '',
     negotiator_name: searchParams.get('negotiator') || '',
   })
   const [page, setPage] = useState(1)
@@ -60,7 +62,25 @@ export default function Cases() {
   )
 
   useEffect(() => {
-    loadCases(page)
+    const initialFilters = {
+      ...emptyFilters,
+      national_code: searchParams.get('national_code') || '',
+      negotiator_name: searchParams.get('negotiator') || '',
+    }
+    setFilters(initialFilters)
+    setLoading(true)
+    fetchCases(initialFilters, 1)
+      .then(({ data, count, total_pages }) => {
+        setRows(data)
+        setTotal(count)
+        setTotalPages(total_pages)
+        setError(null)
+      })
+      .catch((err) => {
+        console.error(err)
+        setError('خطا در دریافت پرونده‌ها از سرور. آیا backend روی پورت ۳۰۰۰ اجراست؟')
+      })
+      .finally(() => setLoading(false))
     fetchNegotiators()
       .then(setNegotiators)
       .catch((e) => console.error(e))
@@ -169,7 +189,7 @@ export default function Cases() {
         loading={loading}
         selectedId={selectedId}
         onRowClick={(row) => setSelectedId(row.id)}
-        onViewHistory={() => navigate('/history')}
+        onViewHistory={(row) => navigate(`/history?case_id=${row.id}`)}
         onAssign={(row) => setAssignTarget({ row, mode: 'assign' })}
         onReassign={(row) => setAssignTarget({ row, mode: 'reassign' })}
       />

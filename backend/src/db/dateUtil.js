@@ -1,8 +1,13 @@
 'use strict';
 
 /**
- * ابزار تاریخ جلالی — تبدیل، مقایسه و محاسبه بازه زمانی.
+ * ابزار تاریخ/زمان — next_action_date به فرمت YYYY-MM-DD HH:mm:ss
+ * تاریخ‌های جلالی (YYYY/MM/DD) برای فیلدهای دیگر همچنان پشتیبانی می‌شوند.
  */
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
 
 function jalaliToGregorian(jy, jm, jd) {
   const jy1 = jy - 979;
@@ -76,8 +81,77 @@ function gregorianToJalali(gy, gm, gd) {
 }
 
 function formatJalali(jy, jm, jd) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${jy}/${pad(jm)}/${pad(jd)}`;
+  return `${jy}/${pad2(jm)}/${pad2(jd)}`;
+}
+
+function formatDatetime(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+function nowDatetime() {
+  return formatDatetime(new Date());
+}
+
+function addMinutesFromNow(minutes) {
+  return formatDatetime(new Date(Date.now() + Number(minutes || 0) * 60000));
+}
+
+/** wait_minutes از الان + ساعت allowed_from روی همان روز (برای next_action_date استراتژی) */
+function addMinutesWithAllowedFrom(minutes, allowedFrom) {
+  const base = new Date(Date.now() + Number(minutes || 0) * 60000);
+  const parts = String(allowedFrom || '09:00').split(':');
+  base.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
+  return formatDatetime(base);
+}
+
+/** فردا ساعت شروع بازه مجاز (برای اولین اکشن خارج از بازه) */
+function nextAllowedStartDatetime(allowedFrom) {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const parts = String(allowedFrom || '09:00').split(':');
+  d.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
+  return formatDatetime(d);
+}
+
+function startOfLocalDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * parse next_action_date یا تاریخ جلالی (YYYY/MM/DD)
+ * @returns {Date|null}
+ */
+function parseActionDatetime(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (iso) {
+    const [, y, mo, d, h = '0', mi = '0', se = '0'] = iso;
+    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
+  }
+
+  if (s.includes('/')) {
+    const parts = s.split('/');
+    if (parts.length === 3) {
+      const [jy, jm, jd] = parts.map(Number);
+      if (jy && jm && jd) {
+        const { year, month, day } = jalaliToGregorian(jy, jm, jd);
+        return new Date(year, month - 1, day, 0, 0, 0);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseJalali(jalaliStr) {
+  const dt = parseActionDatetime(jalaliStr);
+  if (!dt) return null;
+  return new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
 }
 
 function localTodayParts() {
@@ -91,27 +165,11 @@ function todayJalali() {
   return formatJalali(j.year, j.month, j.day);
 }
 
-function tomorrowJalali() {
+/** تاریخ و ساعت جلالی فعلی (local تهران) به فرمت YYYY/MM/DD HH:mm */
+function nowJalaliDateTime() {
   const n = new Date();
-  n.setDate(n.getDate() + 1);
   const j = gregorianToJalali(n.getFullYear(), n.getMonth() + 1, n.getDate());
-  return formatJalali(j.year, j.month, j.day);
-}
-
-function jalaliDateAfterMinutes(minutes) {
-  const d = new Date(Date.now() + minutes * 60000);
-  const j = gregorianToJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-  return formatJalali(j.year, j.month, j.day);
-}
-
-function parseJalali(jalaliStr) {
-  if (!jalaliStr) return null;
-  const parts = String(jalaliStr).split('/');
-  if (parts.length !== 3) return null;
-  const [jy, jm, jd] = parts.map(Number);
-  if (!jy || !jm || !jd) return null;
-  const { year, month, day } = jalaliToGregorian(jy, jm, jd);
-  return new Date(Date.UTC(year, month - 1, day));
+  return `${formatJalali(j.year, j.month, j.day)} ${pad2(n.getHours())}:${pad2(n.getMinutes())}`;
 }
 
 function todayUTC() {
@@ -120,12 +178,15 @@ function todayUTC() {
 
 function calcActionStatus(nextActionDate) {
   if (!nextActionDate) return 'waiting';
-  const actionDate = parseJalali(nextActionDate);
-  if (!actionDate) return 'waiting';
-  const today = todayUTC();
-  const diff = actionDate.getTime() - today.getTime();
-  if (diff > 0) return 'waiting';
-  if (diff === 0) return 'due_today';
+  const actionDt = parseActionDatetime(nextActionDate);
+  if (!actionDt) return 'waiting';
+
+  const now = new Date();
+  if (now.getTime() < actionDt.getTime()) return 'waiting';
+
+  const actionDay = startOfLocalDay(actionDt);
+  const today = startOfLocalDay(now);
+  if (actionDay.getTime() === today.getTime()) return 'due_today';
   return 'overdue';
 }
 
@@ -137,8 +198,9 @@ function daysDiffFromToday(jalaliStr) {
 }
 
 function isActionDue(nextActionDate) {
-  const diff = daysDiffFromToday(nextActionDate);
-  return diff !== null && diff <= 0;
+  const actionDt = parseActionDatetime(nextActionDate);
+  if (!actionDt) return false;
+  return Date.now() >= actionDt.getTime();
 }
 
 function parseHHMM(str) {
@@ -161,17 +223,90 @@ function isWithinAllowedWindow(allowedFrom, allowedTo) {
   return now >= from || now <= to;
 }
 
+/** آیا زمان مشخص در بازه allowed_from..allowed_to است؟ */
+function isDatetimeWithinAllowedWindow(dt, allowedFrom, allowedTo) {
+  const date = dt instanceof Date ? dt : new Date(dt);
+  const mins = date.getHours() * 60 + date.getMinutes();
+  const from = parseHHMM(allowedFrom);
+  const to = parseHHMM(allowedTo);
+  if (from <= to) return mins >= from && mins <= to;
+  return mins >= from || mins <= to;
+}
+
+/**
+ * زمان اقدام بعدی: now + wait_minutes، سپس بررسی بازه مجاز اکشن بعدی.
+ * اگر خارج از بازه بود → روز بعد candidate در ساعت allowed_from.
+ */
+function computeNextActionDate(waitMinutes, nextAction) {
+  const candidate = new Date(Date.now() + Number(waitMinutes || 0) * 60000);
+  const allowedFrom = nextAction?.allowed_from || '09:00';
+  const allowedTo = nextAction?.allowed_to || '18:00';
+
+  if (isDatetimeWithinAllowedWindow(candidate, allowedFrom, allowedTo)) {
+    return formatDatetime(candidate);
+  }
+
+  const nextDay = new Date(candidate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const parts = String(allowedFrom).split(':');
+  nextDay.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
+  return formatDatetime(nextDay);
+}
+
+function jalaliDateToDatetime(jalaliStr) {
+  if (!jalaliStr) return null;
+  const parts = String(jalaliStr).trim().split('/');
+  if (parts.length !== 3) return null;
+  const [jy, jm, jd] = parts.map(Number);
+  if (!jy || !jm || !jd) return null;
+  const { year, month, day } = jalaliToGregorian(jy, jm, jd);
+  return formatDatetime(new Date(year, month - 1, day, 0, 0, 0));
+}
+
+/** ترکیب تاریخ جلالی (YYYY/MM/DD) و ساعت (HH:mm) به datetime گرگوری local تهران */
+function jalaliDateTimeToDatetime(jalaliStr, timeStr) {
+  if (!jalaliStr) return null;
+  const parts = String(jalaliStr).trim().split('/');
+  if (parts.length !== 3) return null;
+  const [jy, jm, jd] = parts.map(Number);
+  if (!jy || !jm || !jd) return null;
+  const { year, month, day } = jalaliToGregorian(jy, jm, jd);
+  const t = String(timeStr || '00:00').split(':');
+  const hh = Number(t[0]) || 0;
+  const mm = Number(t[1]) || 0;
+  return formatDatetime(new Date(year, month - 1, day, hh, mm, 0));
+}
+
+/** آیا ساعت (HH:mm) در بازه مجاز [from, to] است؟ */
+function isTimeWithinAllowedWindow(timeStr, allowedFrom, allowedTo) {
+  const mins = parseHHMM(timeStr);
+  const from = parseHHMM(allowedFrom);
+  const to = parseHHMM(allowedTo);
+  if (from <= to) return mins >= from && mins <= to;
+  return mins >= from || mins <= to;
+}
+
 module.exports = {
   parseJalali,
+  parseActionDatetime,
   todayUTC,
   todayJalali,
-  tomorrowJalali,
-  jalaliDateAfterMinutes,
+  nowJalaliDateTime,
+  nowDatetime,
+  addMinutesFromNow,
+  addMinutesWithAllowedFrom,
+  nextAllowedStartDatetime,
+  jalaliDateToDatetime,
+  formatDatetime,
   formatJalali,
   gregorianToJalali,
   calcActionStatus,
   daysDiffFromToday,
   isActionDue,
   isWithinAllowedWindow,
+  isDatetimeWithinAllowedWindow,
+  isTimeWithinAllowedWindow,
+  jalaliDateTimeToDatetime,
+  computeNextActionDate,
   currentMinutesOfDay,
 };

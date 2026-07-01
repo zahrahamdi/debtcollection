@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { Filter, X, Search } from 'lucide-react'
+import { fetchNegotiators } from '../../api/negotiators'
 import { CASE_STATUS, ACTION_STATUS } from '../../utils/constants'
 
 const statusOptions = [
@@ -19,6 +21,16 @@ const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 export default function CasesFilters({ filters, onChange, onSearch, onReset }) {
+  const [negotiators, setNegotiators] = useState([])
+
+  useEffect(() => {
+    fetchNegotiators()
+      .then(setNegotiators)
+      .catch(() => {})
+  }, [])
+
+  const activeNegotiators = negotiators.filter((n) => n.status === 'active')
+
   const set = (key) => (e) => onChange({ ...filters, [key]: e.target.value })
   const hasActive = Object.values(filters).some((v) => v)
 
@@ -91,14 +103,22 @@ export default function CasesFilters({ filters, onChange, onSearch, onReset }) {
           ))}
         </select>
 
+        {/* نوع اعتبار */}
+        <select className={inputClass} value={filters.credit_type} onChange={set('credit_type')}>
+          <option value="">همه انواع اعتبار</option>
+          <option value="loan">وام</option>
+          <option value="bnpl">BNPL</option>
+        </select>
+
         {/* مسئول پرونده */}
-        <input
-          className={inputClass}
-          placeholder="مسئول پرونده"
-          value={filters.negotiator_name}
-          onChange={set('negotiator_name')}
-          onKeyDown={handleKeyDown}
-        />
+        <select className={inputClass} value={filters.negotiator_name} onChange={set('negotiator_name')}>
+          <option value="">همه مسئولین پرونده</option>
+          {activeNegotiators.map((n) => (
+            <option key={n.id} value={n.name}>
+              {n.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="mt-3 flex justify-end">

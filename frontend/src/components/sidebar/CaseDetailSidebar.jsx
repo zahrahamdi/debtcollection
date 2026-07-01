@@ -7,12 +7,15 @@ import {
   PhoneCall,
   Clock,
   FileText,
-  ListChecks,
+  History,
   ChevronLeft,
+  ListChecks,
+  Banknote,
 } from 'lucide-react'
 import Badge from '../table/Badge'
 import { fetchCaseById } from '../../api/cases'
-import { formatRial, formatDate, toFaDigits, orDash } from '../../utils/format'
+import { formatRial, formatDate, formatNextActionDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
+import { currentUser, isAdmin } from '../../utils/auth'
 import {
   caseStatusLabel,
   caseStatusTone,
@@ -40,20 +43,69 @@ function SectionTitle({ children }) {
   )
 }
 
-const actionIconByType = { sms: MessageSquare, autocall: Phone, call: PhoneCall }
+const actionIconByType = { sms: MessageSquare, autocall: Phone, call: PhoneCall, payment: Banknote }
 const iconFor = (type) => actionIconByType[type] ?? Clock
 
-// مراحلی که در آن‌ها اقدام جاری «تماس مذاکره‌کننده» است
-const NEGOTIATOR_STAGES = ['in_negotiation', 'pending_negotiator_call', 'pending_negotiator_result']
+function actionIconKey(actionType) {
+  if (actionType === 'payment_full' || actionType === 'payment_partial') return 'payment'
+  if (actionType?.includes('sms')) return 'sms'
+  if (actionType?.includes('autocall')) return 'autocall'
+  if (actionType === 'negotiator_call') return 'call'
+  return 'call'
+}
 
-// شرط مجاز بودن ثبت خروجی تماس (Story 3.3):
-// پرونده در مرحله‌ی تماس مذاکره‌کننده باشد و وضعیت اقدام «معوق» یا «نوبت امروز» باشد.
+function actionDisplayTitle(action, idx) {
+  if (action.action_type === 'payment_full') return 'پرداخت کامل'
+  if (action.action_type === 'payment_partial') return 'پرداخت جزئی'
+  return `اقدام ${toFaDigits(idx + 1)}: ${actionTypeLabel(action.action_type)}`
+}
+
+function isPaymentAction(actionType) {
+  return actionType === 'payment_full' || actionType === 'payment_partial'
+}
+
+const NEGOTIATOR_CALL_STATUSES = ['pending_negotiator_call', 'in_negotiation']
+
+function canUserRegisterCall(detail) {
+  if (!detail) return false
+  if (isAdmin()) return true
+  if (
+    currentUser.role === 'negotiator' &&
+    detail.assigned_negotiator_id != null &&
+    Number(detail.assigned_negotiator_id) === Number(currentUser.negotiatorId)
+  ) {
+    return true
+  }
+  return false
+}
+
 function canRegisterCall(detail) {
   return (
     Boolean(detail) &&
-    NEGOTIATOR_STAGES.includes(detail.case_status) &&
-    ['overdue', 'due_today'].includes(detail.action_status)
+    NEGOTIATOR_CALL_STATUSES.includes(detail.case_status) &&
+    ['overdue', 'due_today'].includes(detail.action_status) &&
+    canUserRegisterCall(detail)
   )
+}
+
+function lastNegotiatorCallIndex(actions) {
+  if (!actions?.length) return -1
+  for (let i = actions.length - 1; i >= 0; i--) {
+    if (actions[i].action_type === 'negotiator_call') return i
+  }
+  return -1
+}
+
+const NEGOTIATOR_RESULT_BY_STATUS = {
+  pending_negotiator_assignment: 'در انتظار تخصیص',
+  pending_negotiator_call: 'در انتظار تماس',
+  in_negotiation: 'در انتظار نتیجه تماس',
+}
+
+function actionResultLabel(action, detail) {
+  if (action.action_type !== 'negotiator_call') return orDash(action.result)
+  if (action.call_status) return orDash(action.result)
+  return NEGOTIATOR_RESULT_BY_STATUS[detail.case_status] || orDash(action.result)
 }
 
 // وضعیت تعهد پرداخت (بخش ۵.۸ PRD)
@@ -105,7 +157,9 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
           </div>
         )}
 
-        {!loading && detail && (
+        {!loading && detail && (() => {
+          const lastNegIdx = lastNegotiatorCallIndex(detail.actions)
+          return (
           <div className="flex min-h-full flex-col">
             {/* هدر */}
             <div className="sticky top-0 z-10 flex items-start justify-between border-b border-slate-100 bg-white px-5 py-4">
@@ -172,11 +226,20 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/installments')}
+                onClick={() => navigate(`/installments?case_id=${detail.id}`)}
                 className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
               >
                 <ListChecks className="h-4 w-4" />
                 مشاهده لیست اقساط
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/history?case_id=${detail.id}`)}
+                className="mt-2 flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+              >
+                <History className="h-4 w-4" />
+                مشاهده تاریخچه کامل
                 <ChevronLeft className="h-4 w-4" />
               </button>
 
@@ -194,7 +257,25 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               {/* CEI و استراتژی */}
               <SectionTitle>شاخص سختی وصول و استراتژی</SectionTitle>
               <div className="divide-y divide-slate-50">
-                <InfoRow label="CEI محاسبه‌شده" value={toFaDigits(orDash(detail.cei))} />
+                <InfoRow
+                  label="CEI محاسبه‌شده"
+                  value={toFaDigits(
+                    orDash(
+                      detail.cei != null
+                        ? Math.round((Number(detail.cei) - Number(detail.cei_boost || 0)) * 100) / 100
+                        : null
+                    )
+                  )}
+                />
+                {Number(detail.cei_boost) > 0 && (
+                  <>
+                    <InfoRow
+                      label="افزایش CEI از شکست استراتژی"
+                      value={toFaDigits(detail.cei_boost)}
+                    />
+                    <InfoRow label="CEI نهایی" value={toFaDigits(orDash(detail.cei))} />
+                  </>
+                )}
                 <InfoRow label="نسخه فرمول CEI" value={orDash(detail.cei_formula_version)} />
                 <InfoRow label="سگمنت پرونده" value={orDash(detail.segment_title)} />
                 <InfoRow label="استراتژی فعال" value={orDash(detail.strategy_title)} />
@@ -262,15 +343,10 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               {detail.actions?.length ? (
                 <ol className="space-y-3">
                   {detail.actions.map((a, idx) => {
-                    const Icon = iconFor(
-                      a.action_type?.includes('sms')
-                        ? 'sms'
-                        : a.action_type?.includes('autocall')
-                          ? 'autocall'
-                          : 'call'
-                    )
-                    const isLast = idx === detail.actions.length - 1
-                    const showRegister = isLast && canRegisterCall(detail)
+                    const Icon = iconFor(actionIconKey(a.action_type))
+                    const payment = isPaymentAction(a.action_type)
+                    const showRegisterBtn =
+                      idx === lastNegIdx && a.action_type === 'negotiator_call' && canRegisterCall(detail)
                     return (
                       <li key={a.id} className="flex gap-3">
                         <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600">
@@ -279,10 +355,13 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                         <div className="flex-1 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-medium text-slate-700">
-                              اقدام {toFaDigits(idx + 1)}: {actionTypeLabel(a.action_type)}
+                              {actionDisplayTitle(a, idx)}
                             </span>
-                            <span className="text-[11px] text-slate-400">
-                              {formatDate(a.action_date)}
+                            <span
+                              className="text-[11px] text-slate-400"
+                              style={jalaliDateTimeStyle}
+                            >
+                              {formatNextActionDateTime(a.action_date)}
                             </span>
                           </div>
                           {a.body_text && (
@@ -293,15 +372,19 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                               وضعیت تماس: {a.call_status}
                             </p>
                           )}
-                          <div className="mt-1 text-xs text-slate-400">
-                            نتیجه: {orDash(a.result)}
-                          </div>
+                          {payment ? (
+                            <p className="mt-1 text-xs text-slate-500">{orDash(a.result)}</p>
+                          ) : (
+                            <div className="mt-1 text-xs text-slate-400">
+                              نتیجه: {actionResultLabel(a, detail)}
+                            </div>
+                          )}
 
-                          {showRegister && (
+                          {showRegisterBtn && (
                             <div className="mt-2 border-t border-slate-100 pt-2">
                               <div className="mb-2 text-[11px] text-slate-400">
-                                نمایش تماس شماره {toFaDigits(detail.call_count)} از{' '}
-                                {toFaDigits(detail.max_call_count)}
+                                نمایش تماس شماره {toFaDigits((detail.call_count ?? 0) + 1)} از{' '}
+                                {toFaDigits(orDash(detail.max_call_count))}
                               </div>
                               <button
                                 type="button"
@@ -323,7 +406,8 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               )}
             </div>
           </div>
-        )}
+          )
+        })()}
       </aside>
     </>
   )

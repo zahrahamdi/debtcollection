@@ -38,16 +38,8 @@ export default function StrategyActionsBuilder({ actions, onChange }) {
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2">
         <span className="text-xs font-medium text-slate-500">اقدام‌های استراتژی (به ترتیب اجرا)</span>
-        <button
-          type="button"
-          onClick={add}
-          className="flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          افزودن اقدام
-        </button>
       </div>
 
       {actions.length === 0 && (
@@ -174,38 +166,31 @@ export default function StrategyActionsBuilder({ actions, onChange }) {
               )}
 
               {isNeg && (
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <div>
-                    <label className={labelClass}>حداکثر تعداد تکرار</label>
-                    <input
-                      type="number"
-                      dir="ltr"
-                      min="1"
-                      className={numClass}
-                      value={a.max_repeat ?? ''}
-                      onChange={(e) => update(i, { max_repeat: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className={labelClass}>میانگین مدت تماس (دقیقه)</label>
-                    <input
-                      type="number"
-                      dir="ltr"
-                      min="1"
-                      className={numClass}
-                      value={a.avg_call_duration ?? ''}
-                      onChange={(e) => update(i, { avg_call_duration: e.target.value })}
-                    />
-                  </div>
-                  <p className="col-span-2 text-[11px] text-slate-400">
-                    هزینه‌ی تماس مذاکره‌کننده هنگام ثبت تماس، بر اساس حقوق ساعتی مذاکره‌کننده × میانگین مدت تماس محاسبه می‌شود.
-                  </p>
+                <div className="mt-2">
+                  <label className={labelClass}>حداکثر تعداد تکرار</label>
+                  <input
+                    type="number"
+                    dir="ltr"
+                    min="1"
+                    className={numClass}
+                    value={a.max_repeat ?? ''}
+                    onChange={(e) => update(i, { max_repeat: e.target.value })}
+                  />
                 </div>
               )}
             </div>
           )
         })}
       </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 flex w-full items-center justify-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-2 text-xs font-medium text-brand-700 hover:bg-brand-100"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        افزودن اقدام
+      </button>
     </div>
   )
 }

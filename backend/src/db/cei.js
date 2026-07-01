@@ -32,6 +32,9 @@ const DEFAULT_BNPL_PARAMS = {
   cap: 100000000,
 };
 
+const round2 = (x) => Math.round(x * 100) / 100;
+const round4 = (x) => Math.round(x * 10000) / 10000;
+
 // انتخاب Collateral Factor بر اساس نوع ضمانت
 function collateralFactor(params, guaranteeType) {
   switch (guaranteeType) {
@@ -85,7 +88,9 @@ function computeCei(creditType, params, caseData) {
   };
 }
 
-const round2 = (x) => Math.round(x * 100) / 100;
-const round4 = (x) => Math.round(x * 10000) / 10000;
+/** CEI نهایی = CEI محاسبه‌شده + cei_boost (boost هرگز در این تابع کم نمی‌شود) */
+function applyCeiBoost(computedCei, ceiBoost = 0) {
+  return round2(Number(computedCei) + Number(ceiBoost || 0));
+}
 
-module.exports = { computeCei, DEFAULT_LOAN_PARAMS, DEFAULT_BNPL_PARAMS };
+module.exports = { computeCei, applyCeiBoost, DEFAULT_LOAN_PARAMS, DEFAULT_BNPL_PARAMS };

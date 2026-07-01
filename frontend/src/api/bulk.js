@@ -12,6 +12,42 @@ export async function uploadCases(file, userName) {
   return data
 }
 
+export async function uploadPayments(file, userName) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (userName) formData.append('user_name', userName)
+
+  const { data } = await client.post('/bulk/upload-payments', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+  return data
+}
+
+export async function assignCases(file, userName) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (userName) formData.append('user_name', userName)
+
+  const { data } = await client.post('/bulk/assign-cases', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+  return data
+}
+
+export async function reassignCases(file, userName) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (userName) formData.append('user_name', userName)
+
+  const { data } = await client.post('/bulk/reassign-cases', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+  return data
+}
+
 export async function fetchBulkHistory(userName) {
   const params = userName ? { user_name: userName } : {}
   const { data } = await client.get('/bulk/history', { params })

@@ -5,7 +5,13 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { query, run } = require('../db/database');
 const { importCasesFromRows, MAX_ROWS } = require('../services/case-import.service');
+const { importPaymentsFromRows } = require('../services/payment-import.service');
 const { deleteDebtorByMobile, deleteAllExceptMobile } = require('../services/debtor-cleanup.service');
+const {
+  bulkAssignFromRows,
+  bulkReassignFromRows,
+  MAX_ROWS: BULK_ASSIGN_MAX_ROWS,
+} = require('../services/bulk-assign.service');
 
 const router = express.Router();
 
@@ -113,6 +119,198 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
       );
     }
     res.status(400).json({ error: err.message || 'خطا در پردازش فایل Excel' });
+  }
+});
+
+/**
+ * POST /api/bulk/upload-payments
+ * body (multipart): file, user_name (optional)
+ */
+router.post('/upload-payments', upload.single('file'), (req, res) => {
+  let bulkId = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
+    }
+
+    const userName = req.body?.user_name || 'ادمین';
+    const rows = parseExcelBuffer(req.file.buffer);
+
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'فایل Excel خالی است' });
+    }
+    if (rows.length > MAX_ROWS) {
+      return res.status(400).json({ error: `حداکثر ${MAX_ROWS} ردیف در هر فایل قابل پردازش است` });
+    }
+
+    const { lastInsertRowid } = run(
+      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
+       VALUES ($user, 'upload_payments', $total, 'processing')`,
+      { $user: userName, $total: rows.length }
+    );
+    bulkId = lastInsertRowid;
+
+    const result = importPaymentsFromRows(rows, userName);
+    const status = operationStatus(result.total, result.success_count, result.fail_count);
+
+    const errorReport = {
+      errors: result.errors,
+      error_rows: result.error_rows,
+    };
+
+    run(
+      `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
+       error_report = $er, completed_at = datetime('now') WHERE id = $id`,
+      {
+        $s: result.success_count,
+        $f: result.fail_count,
+        $st: status,
+        $er: JSON.stringify(errorReport),
+        $id: bulkId,
+      }
+    );
+
+    res.json({
+      bulk_id: bulkId,
+      total: result.total,
+      success_count: result.success_count,
+      fail_count: result.fail_count,
+      full_count: result.full_count,
+      partial_count: result.partial_count,
+      status,
+      errors: result.errors,
+      has_error_report: result.fail_count > 0,
+    });
+  } catch (err) {
+    console.error('[POST /api/bulk/upload-payments]', err);
+    if (bulkId) {
+      run(
+        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
+         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
+        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
+      );
+    }
+    res.status(400).json({ error: err.message || 'خطا در پردازش فایل Excel پرداخت‌ها' });
+  }
+});
+
+function finishBulkOperation(bulkId, result, operationType) {
+  const status = operationStatus(result.total, result.success_count, result.fail_count);
+  const errorReport = {
+    errors: result.errors,
+    error_rows: result.error_rows,
+  };
+
+  run(
+    `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
+     error_report = $er, completed_at = datetime('now') WHERE id = $id`,
+    {
+      $s: result.success_count,
+      $f: result.fail_count,
+      $st: status,
+      $er: JSON.stringify(errorReport),
+      $id: bulkId,
+    }
+  );
+
+  return {
+    bulk_id: bulkId,
+    total: result.total,
+    success_count: result.success_count,
+    fail_count: result.fail_count,
+    status,
+    errors: result.errors,
+    has_error_report: result.fail_count > 0,
+  };
+}
+
+/**
+ * POST /api/bulk/assign-cases
+ * body (multipart): file, user_name (optional)
+ */
+router.post('/assign-cases', upload.single('file'), (req, res) => {
+  let bulkId = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
+    }
+
+    const userName = req.body?.user_name || 'ادمین';
+    const rows = parseExcelBuffer(req.file.buffer);
+
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'فایل Excel خالی است' });
+    }
+    if (rows.length > BULK_ASSIGN_MAX_ROWS) {
+      return res.status(400).json({
+        error: `حداکثر ${BULK_ASSIGN_MAX_ROWS} ردیف در هر فایل قابل پردازش است`,
+      });
+    }
+
+    const { lastInsertRowid } = run(
+      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
+       VALUES ($user, 'bulk_assign', $total, 'processing')`,
+      { $user: userName, $total: rows.length }
+    );
+    bulkId = lastInsertRowid;
+
+    const result = bulkAssignFromRows(rows, userName);
+    res.json(finishBulkOperation(bulkId, result));
+  } catch (err) {
+    console.error('[POST /api/bulk/assign-cases]', err);
+    if (bulkId) {
+      run(
+        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
+         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
+        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
+      );
+    }
+    res.status(400).json({ error: err.message || 'خطا در پردازش فایل تخصیص گروهی' });
+  }
+});
+
+/**
+ * POST /api/bulk/reassign-cases
+ * body (multipart): file, user_name (optional)
+ */
+router.post('/reassign-cases', upload.single('file'), (req, res) => {
+  let bulkId = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
+    }
+
+    const userName = req.body?.user_name || 'ادمین';
+    const rows = parseExcelBuffer(req.file.buffer);
+
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'فایل Excel خالی است' });
+    }
+    if (rows.length > BULK_ASSIGN_MAX_ROWS) {
+      return res.status(400).json({
+        error: `حداکثر ${BULK_ASSIGN_MAX_ROWS} ردیف در هر فایل قابل پردازش است`,
+      });
+    }
+
+    const { lastInsertRowid } = run(
+      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
+       VALUES ($user, 'bulk_reassign', $total, 'processing')`,
+      { $user: userName, $total: rows.length }
+    );
+    bulkId = lastInsertRowid;
+
+    const result = bulkReassignFromRows(rows, userName);
+    res.json(finishBulkOperation(bulkId, result));
+  } catch (err) {
+    console.error('[POST /api/bulk/reassign-cases]', err);
+    if (bulkId) {
+      run(
+        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
+         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
+        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
+      );
+    }
+    res.status(400).json({ error: err.message || 'خطا در پردازش فایل تخصیص مجدد گروهی' });
   }
 });
 
