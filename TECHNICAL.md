@@ -62,7 +62,8 @@ backend/src/
 │   ├── cei.js                # computeCei, applyCeiBoost
 │   ├── segmentUtil.js        # بازه CEI، overlap، validateCondition
 │   ├── dateUtil.js           # تاریخ شمسی/میلادی، next_action_date، calcActionStatus
-│   └── strategyActions.js    # CRUD/validate اقدام‌ها + repeat_on_results
+│   ├── strategyActions.js    # CRUD/validate اقدام‌ها + repeat_on_results
+│   └── lastAction.js         # resolve last_action از case_actions + تخصیص ★
 ├── routes/                   # thin controllers — parse request, call service, JSON response
 └── services/                 # business logic
     ├── strategy-engine.service.js   # اجرای خودکار استراتژی ★
@@ -92,6 +93,24 @@ backend/src/
 | `payment-import.service.js` | ثبت پرداخت جزئی/کامل، به‌روزرسانی مالی، resume استراتژی |
 | `sms.service.js` | `sendSms` (Kavenegar یا `SMS_MOCK`), placeholder `{نام_کاربر}`, `{مبلغ_مطالبات}`, `{لینک_پرداخت}`. **نتیجه delivery** در موتور استراتژی جداگانه Mock می‌شود. |
 
+### ۲.۳ `lastAction.js` — آخرین اقدام پرونده
+
+**فایل:** `backend/src/db/lastAction.js` — مرجع PRD بخش **۵.۱۱**
+
+| تابع | کار |
+|------|-----|
+| `buildLastActionMap(caseIds)` | batch resolve برای `GET /cases` |
+| `resolveLastAction(caseId)` | resolve تک‌پرونده |
+| `actionTypeToLabel(type)` | `action_type` → برچسب فارسی |
+
+**`ACTION_TYPE_LABELS`:** شامل `negotiator_call: 'تماس مذاکره‌کننده'` (نام واحد در کل سیستم)
+
+**منطق resolve:**
+
+1. آخرین `case_actions` (بیشترین `id`)
+2. اگر آخرین «تخصیص به مذاکره‌کننده» در `case_history` جدیدتر → `last_action = تخصیص به مذاکره‌کننده`
+3. `executeNegotiatorCallAction` فقط `next_action` را ست می‌کند — **`last_action` ست نمی‌شود**
+
 ---
 
 ## ۳. Frontend — ساختار
@@ -119,7 +138,7 @@ frontend/src/
 │   └── admin/                # StrategyActionsBuilder (RepeatResultsMultiSelect), …
 ├── api/                      # axios wrappers — یک فایل per domain
 └── utils/
-    ├── constants.js          # CASE_STATUS (۱۵), ACTION_TYPE, HISTORY_OPERATIONS
+    ├── constants.js          # CASE_STATUS (۱۵), ACTION_TYPE, HISTORY_OPERATIONS, normalizeLastActionLabel
     ├── format.js             # formatRial, toFaDigits, formatDate
     ├── historyDetails.js     # فرمت جزئیات case_history برای UI
     └── auth.js               # currentUser mock (admin / negotiator)
@@ -284,7 +303,7 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 - **`shouldRetryNegotiator`:** `repeat_on_results.includes(call_status)` و سقف پر نشده → `pending_negotiator_recall` + `wait_repeat_minutes`
 - **پاسخگو نبود** ولی **خارج از** `repeat_on_results` (یا سقف پر) → `next_action_date = now` برای عبور موتور به اقدام بعدی / شکست
 - در آخرین تماس مجاز → `next_action_date = now` (بدون زمان‌بندی تماس بعدی)
-- ثبت `case_actions` + `promises` (در صورت تعهد) + SMS عدم پاسخگویی (اگر پاسخگو نبود و مشمول تکرار)
+- ثبت `case_actions` (`negotiator_call`) + `last_action = 'تماس مذاکره‌کننده'` + `promises` (در صورت تعهد) + SMS عدم پاسخگویی
 
 ### ۵.۳ آپلود پرداخت
 
@@ -297,10 +316,12 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 ### ۵.۴ تخصیص پرونده
 
-**Route:** `POST /api/cases/:id/assign`
+**Route:** `POST /api/cases/:id/assign` · **`bulk-assign.service.js`**
 
 - بررسی ظرفیت مذاکره‌کننده
 - یک بدهکار = یک مذاکره‌کننده فعال
+- **تخصیص اولیه:** `last_action = 'تخصیص به مذاکره‌کننده'`, `last_action_date = todayJalali()` + `case_history`
+- **تخصیص مجدد:** فقط `assigned_negotiator_id` — `last_action` از resolve باقی می‌ماند
 - history: «تخصیص به مذاکره‌کننده» / «تخصیص مجدد»
 
 ---
@@ -319,8 +340,8 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 | Method | Path | Query / Body | توضیح |
 |--------|------|--------------|--------|
-| GET | `/` | `debtor_name`, `national_code`, `credit_id`, `credit_type`, `case_status`, `action_status`, `negotiator_name`, `page` | لیست paginated (100/page) + `action_status` محاسب‌شده |
-| GET | `/:id` | — | جزئیات + actions + promises + negotiator_stage + strategy_failure_count |
+| GET | `/` | … | لیست paginated — `last_action` از `buildLastActionMap` (نه فیلد خام DB) |
+| GET | `/:id` | — | جزئیات + actions + … — `last_action` resolve شده |
 | GET | `/:id/history` | `operation`, `user_name`, `from_date`, `to_date` | Audit Trail پرونده |
 | GET | `/:id/installments` | — | اقساط پرونده |
 | POST | `/:id/assign` | `{ negotiator_id, user_name? }` | تخصیص / تخصیص مجدد |
@@ -531,10 +552,16 @@ cost, avg_call_duration
 
 لیست کامل: آرایه `HISTORY_OPERATIONS` در `constants.js` (۳۲+ عملیات).
 
+### Frontend — `normalizeLastActionLabel`
+
+`constants.js` — تبدیل legacy «تماس تلفنی مذاکره‌کننده» → «تماس مذاکره‌کننده» در `CasesTable` و `CaseDetailSidebar`.
+
+---
+
 ### احراز هویت (دمو)
 
 فقط mock در `frontend/src/utils/auth.js` — backend middleware واقعی ندارد.
 
 ---
 
-*آخرین به‌روزرسانی: `repeat_on_results` · مدت تماس شرطی (پاسخگو نبود → ۰) · ۱۵ وضعیت پرونده · هم‌راستا با PRD بخش ۱۰*
+*آخرین به‌روزرسانی: `lastAction.js` · resolve `last_action` از `case_actions` · تخصیص · نام واحد «تماس مذاکره‌کننده» · PRD ۵.۱۱*

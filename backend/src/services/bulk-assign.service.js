@@ -1,7 +1,8 @@
 'use strict';
 
 const { query, run } = require('../db/database');
-const { nowDatetime, calcActionStatus } = require('../db/dateUtil');
+const { nowDatetime, calcActionStatus, todayJalali } = require('../db/dateUtil');
+const { ASSIGN_OPERATION } = require('../db/lastAction');
 
 const MAX_ROWS = 1000;
 
@@ -125,7 +126,8 @@ function processAssignRow(mapped, rowNum, rawRow, ctx) {
   const assignActionStatus = calcActionStatus(assignNow);
   run(
     `UPDATE cases SET assigned_negotiator_id = $n, case_status = 'pending_negotiator_call',
-     next_action = $na, next_action_date = $nad, action_status = $as, updated_at = datetime('now')
+     next_action = $na, next_action_date = $nad, action_status = $as,
+     last_action = $la, last_action_date = $lad, updated_at = datetime('now')
      WHERE id = $id`,
     {
       $n: negotiator.id,
@@ -133,6 +135,8 @@ function processAssignRow(mapped, rowNum, rawRow, ctx) {
       $na: 'تماس مذاکره‌کننده',
       $nad: assignNow,
       $as: assignActionStatus,
+      $la: ASSIGN_OPERATION,
+      $lad: todayJalali(),
     }
   );
 

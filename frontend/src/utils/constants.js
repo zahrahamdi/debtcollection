@@ -116,6 +116,12 @@ export const actionStatusTone = (key) => ACTION_STATUS[key]?.tone ?? 'gray'
 export const creditTypeLabel = (key) => CREDIT_TYPE[key] ?? key ?? '—'
 export const guaranteeTypeLabel = (key) => GUARANTEE_TYPE[key] ?? key ?? '—'
 export const actionTypeLabel = (key) => ACTION_TYPE[key]?.label ?? key ?? '—'
+
+/** یکسان‌سازی برچسب‌های legacy آخرین اقدام */
+export const normalizeLastActionLabel = (label) => {
+  if (label === 'تماس تلفنی مذاکره‌کننده') return 'تماس مذاکره‌کننده'
+  return label
+}
 export const promiseStatusLabel = (key) => PROMISE_STATUS[key] ?? key ?? '—'
 export const paymentStatusLabel = (key) => PAYMENT_STATUS[key]?.label ?? key ?? '—'
 export const paymentStatusTone = (key) => PAYMENT_STATUS[key]?.tone ?? 'gray'

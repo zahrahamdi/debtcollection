@@ -471,14 +471,11 @@ async function executeAutocallAction(caseRow, action) {
 }
 
 function executeNegotiatorCallAction(caseRow, action) {
-  const actionLabel = ACTION_LABELS.negotiator_call;
   const maxRepeat = Number(action.max_repeat) || 3;
   const common = {
     current_action_seq: action.seq,
     current_action_repeat: 0,
     max_call_count: maxRepeat,
-    last_action: actionLabel,
-    last_action_date: todayJalali(),
   };
 
   // اگر پرونده از قبل مذاکره‌کننده دارد، مرحله تخصیص را رد می‌کنیم و

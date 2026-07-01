@@ -8,6 +8,7 @@ import {
   actionStatusTone,
   creditTypeLabel,
   guaranteeTypeLabel,
+  normalizeLastActionLabel,
 } from '../../utils/constants'
 
 // ستون‌های گرید مطابق بخش ۳.۱ PRD
@@ -100,7 +101,7 @@ export default function CasesTable({
                   <td className={`${cell} text-slate-700`}>{formatRial(row.claims_amount)}</td>
                   <td className={`${cell} text-slate-700`}>{formatRial(row.penalty_amount)}</td>
                   <td className={`${cell} text-slate-600`}>{orDash(row.negotiator_name)}</td>
-                  <td className={`${cell} text-slate-600`}>{orDash(row.last_action)}</td>
+                  <td className={`${cell} text-slate-600`}>{orDash(normalizeLastActionLabel(row.last_action))}</td>
                   <td className={cell}>
                     <Badge tone={caseStatusTone(row.case_status)}>
                       {caseStatusLabel(row.case_status)}

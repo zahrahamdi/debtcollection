@@ -143,7 +143,7 @@ async function main() {
     penalty_amount: 10000000,
     assigned_negotiator_id: negotiatorId,
     case_status: 'in_negotiation',
-    last_action: 'تماس تلفنی مذاکره‌کننده',
+    last_action: 'تماس مذاکره‌کننده',
     last_action_date: todayJalali(),
     next_action: 'تماس مذاکره‌کننده',
     next_action_date: futureNad,

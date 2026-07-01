@@ -12,9 +12,11 @@ const {
   jalaliDateTimeToDatetime,
   isTimeWithinAllowedWindow,
   computeNextActionDate,
+  todayJalali,
 } = require('../db/dateUtil');
 const { sendSms, replacePlaceholders, NO_ANSWER_SMS_TEXT, PAYMENT_LINK_SMS_TEMPLATE } = require('../services/sms.service');
 const { parseRepeatOnResults } = require('../db/strategyActions');
+const { buildLastActionMap, resolveLastAction, ASSIGN_OPERATION } = require('../db/lastAction');
 
 const PAGE_SIZE = 100;
 
@@ -61,9 +63,15 @@ const CASE_SEGMENT_STRATEGY_FIELDS = `
         str.title AS strategy_title,
 `;
 
-// افزودن وضعیت اقدام محاسبه‌شده به هر پرونده
-function enrichRow(row) {
-  return { ...row, action_status: calcActionStatus(row.next_action_date) };
+// افزودن وضعیت اقدام محاسبه‌شده و last_action از case_actions
+function enrichRow(row, lastActionMap) {
+  const resolved = lastActionMap?.[row.id] ?? resolveLastAction(row.id);
+  return {
+    ...row,
+    action_status: calcActionStatus(row.next_action_date),
+    last_action: resolved.last_action,
+    last_action_date: resolved.last_action_date,
+  };
 }
 
 /**
@@ -157,8 +165,9 @@ router.get('/', (req, res) => {
       params
     );
 
-    // محاسبه پویای وضعیت اقدام برای همه ردیف‌ها
-    rows = rows.map(enrichRow);
+    // محاسبه پویای وضعیت اقدام و آخرین اقدام از case_actions
+    const lastActionMap = buildLastActionMap(rows.map((r) => r.id));
+    rows = rows.map((r) => enrichRow(r, lastActionMap));
 
     // فیلتر وضعیت اقدام بعد از محاسبه (چون مقدار در DB ممکن است کهنه باشد)
     if (action_status) {
@@ -206,7 +215,8 @@ router.get('/:id', (req, res) => {
     );
 
     if (rows.length === 0) return res.status(404).json({ error: 'پرونده یافت نشد' });
-    const caseRow = enrichRow(rows[0]);
+    const lastActionMap = buildLastActionMap([id]);
+    const caseRow = enrichRow(rows[0], lastActionMap);
 
     const actions = query(
       `SELECT * FROM case_actions WHERE case_id = $id ORDER BY id ASC`,
@@ -409,15 +419,19 @@ router.post('/:id/assign', (req, res) => {
     } else {
       const assignNow = nowDatetime();
       const assignActionStatus = calcActionStatus(assignNow);
+      const assignDate = todayJalali();
       run(
         `UPDATE cases SET assigned_negotiator_id = $n, case_status = 'pending_negotiator_call',
-         next_action = $na, next_action_date = $nad, action_status = $as, updated_at = datetime('now') WHERE id = $id`,
+         next_action = $na, next_action_date = $nad, action_status = $as,
+         last_action = $la, last_action_date = $lad, updated_at = datetime('now') WHERE id = $id`,
         {
           $n: negotiator_id,
           $id: id,
           $na: 'تماس مذاکره‌کننده',
           $nad: assignNow,
           $as: assignActionStatus,
+          $la: ASSIGN_OPERATION,
+          $lad: assignDate,
         }
       );
     }
@@ -673,7 +687,7 @@ router.post('/:id/call-outcome', async (req, res) => {
         next_action = $na,
         next_action_date = $nad,
         action_status = $as,
-        last_action = 'تماس تلفنی مذاکره‌کننده',
+        last_action = 'تماس مذاکره‌کننده',
         last_action_date = $cd,
         case_cost = case_cost + $cost,
         strategy_id = CASE WHEN $clear = 1 THEN NULL ELSE strategy_id END,

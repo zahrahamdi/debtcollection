@@ -24,6 +24,7 @@ import {
   creditTypeLabel,
   guaranteeTypeLabel,
   actionTypeLabel,
+  normalizeLastActionLabel,
 } from '../../utils/constants'
 
 function InfoRow({ label, value }) {
@@ -247,7 +248,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               {/* اقدامات و تماس‌ها */}
               <SectionTitle>اقدام و تماس</SectionTitle>
               <div className="divide-y divide-slate-50">
-                <InfoRow label="آخرین اقدام انجام‌شده" value={orDash(detail.last_action)} />
+                <InfoRow label="آخرین اقدام انجام‌شده" value={orDash(normalizeLastActionLabel(detail.last_action))} />
                 <InfoRow label="تاریخ آخرین اقدام" value={formatDate(detail.last_action_date)} />
                 <InfoRow
                   label="تعداد تماس مذاکره‌کننده"
