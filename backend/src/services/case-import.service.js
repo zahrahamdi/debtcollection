@@ -674,11 +674,29 @@ function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActi
   let nextAction = firstStrategyActionLabel(strategy.id);
   let newStatus = 'pending_strategy_start';
 
+  // پیشرفت اکشن جاری روی پرونده: پیش‌فرض از ابتدای استراتژی (seq = 0).
+  let currentActionSeq = 0;
+
   if (startActionType) {
     nextAction = actionTypeToLabel(startActionType);
     const resolved = resolveStatusForStartAction(startActionType, caseRow);
     newStatus = resolved.case_status;
     nextAction = resolved.next_action;
+
+    const startSeq = Number(options.startActionSeq) || 0;
+    if (startSeq > 0) {
+      if (startActionType === 'negotiator_call') {
+        // مرحله مذاکره مستقیماً فعال می‌شود؛ current_action_seq باید به همان اکشن اشاره کند.
+        currentActionSeq = startSeq;
+      } else {
+        // موتور از اکشن بعدیِ seq قبلی شروع می‌کند، پس seq درست‌قبل از اکشن شروع را ذخیره می‌کنیم.
+        const prev = query(
+          `SELECT COALESCE(MAX(seq), 0) AS m FROM strategy_actions WHERE strategy_id = $sid AND seq < $q`,
+          { $sid: strategy.id, $q: startSeq }
+        );
+        currentActionSeq = Number(prev[0]?.m) || 0;
+      }
+    }
   }
 
   const nextActionDate = options.nextActionDate ?? computeInitialNextActionDate(strategy.id);
@@ -692,7 +710,8 @@ function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActi
 
   run(
     `UPDATE cases SET strategy_id = $sid, case_status = $st, next_action = $na,
-     next_action_date = $nad, action_status = $as, max_call_count = $mc, updated_at = datetime('now') WHERE id = $id`,
+     next_action_date = $nad, action_status = $as, max_call_count = $mc,
+     current_action_seq = $cas, current_action_repeat = 0, updated_at = datetime('now') WHERE id = $id`,
     {
       $sid: strategy.id,
       $st: newStatus,
@@ -700,6 +719,7 @@ function stepAssignStrategy(caseId, segmentId, caseData, caseSnapshot, startActi
       $nad: nextActionDate,
       $as: calcActionStatus(nextActionDate),
       $mc: maxCalls,
+      $cas: currentActionSeq,
       $id: caseId,
     }
   );
@@ -757,7 +777,7 @@ function stepChangeStrategyOnSegmentShift(caseId, newSegmentId, caseData, caseSn
     caseData,
     caseSnapshot,
     startAction.action_type,
-    { nextActionDate }
+    { nextActionDate, startActionSeq: startAction.seq }
   );
 
   if (!assignResult.ok) return { ok: false };

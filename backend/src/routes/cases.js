@@ -11,9 +11,10 @@ const {
   jalaliDateToDatetime,
   jalaliDateTimeToDatetime,
   isTimeWithinAllowedWindow,
-  addMinutesFromNow,
+  computeNextActionDate,
 } = require('../db/dateUtil');
 const { sendSms, replacePlaceholders, NO_ANSWER_SMS_TEXT, PAYMENT_LINK_SMS_TEMPLATE } = require('../services/sms.service');
+const { parseRepeatOnResults } = require('../db/strategyActions');
 
 const PAGE_SIZE = 100;
 
@@ -38,9 +39,13 @@ function computeNegotiatorStage(strategyId) {
   const neg = actions[negIdx];
   const next = actions[negIdx + 1] || null;
   return {
+    seq: neg.seq,
     allowed_from: neg.allowed_from || null,
     allowed_to: neg.allowed_to || null,
-    wait_minutes: neg.wait_minutes ?? 0,
+    wait_next_minutes: neg.wait_next_minutes ?? neg.wait_minutes ?? 0,
+    wait_repeat_minutes: neg.wait_repeat_minutes ?? 60,
+    max_repeat: neg.max_repeat ?? 3,
+    repeat_on_results: parseRepeatOnResults(neg),
     next_action_type: next ? next.action_type : null,
     next_action_label: next ? STRATEGY_ACTION_LABELS[next.action_type] || next.action_type : null,
   };
@@ -475,8 +480,10 @@ router.post('/:id/call-outcome', async (req, res) => {
     const c = caseRows[0];
 
     if (!b.call_status) return res.status(400).json({ error: 'وضعیت تماس اجباری است' });
-    const callDuration = Number(b.call_duration);
-    if (!callDuration || callDuration <= 0) {
+
+    const isNoAnswer = b.call_status === 'پاسخگو نبود' || b.call_status === 'no_answer';
+    const callDuration = isNoAnswer ? 0 : Number(b.call_duration);
+    if (!isNoAnswer && (!callDuration || callDuration <= 0)) {
       return res.status(400).json({ error: 'مدت تماس به دقیقه اجباری است' });
     }
 
@@ -519,9 +526,26 @@ router.post('/:id/call-outcome', async (req, res) => {
     const stage = computeNegotiatorStage(c.strategy_id) || {};
     const allowedFrom = stage.allowed_from || '09:00';
     const allowedTo = stage.allowed_to || '18:00';
-    const waitMinutes = Number(stage.wait_minutes) || 0;
+    const waitRepeatMinutes = Number(stage.wait_repeat_minutes) || 0;
     const nextActionLabelAfterCall = stage.next_action_label || 'شکست استراتژی';
-    const isLastCall = Boolean(c.max_call_count) && newCallCount >= Number(c.max_call_count);
+    const negWindow = { allowed_from: allowedFrom, allowed_to: allowedTo };
+    const repeatOn = stage.repeat_on_results || [];
+
+    // تعداد تلاش‌های انجام‌شده روی اکشن مذاکرهٔ جاری (شامل همین تماس)
+    const maxRepeat = Number(c.max_call_count) || Number(stage.max_repeat) || 3;
+    const attemptsSoFar = Number(c.current_action_repeat) || 0;
+    if (attemptsSoFar >= maxRepeat) {
+      return res.status(400).json({ error: 'سقف تماس‌های مجاز در این استراتژی پر شده است' });
+    }
+    const attemptsMade = attemptsSoFar + 1;
+    const reachedMax = attemptsMade >= maxRepeat;
+
+    const shouldRetryNegotiator =
+      !isDeath &&
+      !b.refer_to_legal &&
+      repeatOn.length > 0 &&
+      repeatOn.includes(b.call_status) &&
+      attemptsMade < maxRepeat;
 
     let newStatus = 'in_negotiation';
     let nextAction = c.next_action;
@@ -537,26 +561,43 @@ router.post('/:id/call-outcome', async (req, res) => {
       newStatus = 'pending_legal_assignment';
       nextAction = 'تخصیص به حقوقی';
       nextActionDate = null;
-    } else if (willPay) {
-      // تصمیم به پرداخت: نوبت بعدی = تاریخ تعهد + ساعت انتخابی (باید در بازه مجاز باشد)
-      if (!b.next_call_time) {
-        return res.status(400).json({ error: 'ساعت تماس بعدی اجباری است' });
-      }
-      if (!isTimeWithinAllowedWindow(b.next_call_time, allowedFrom, allowedTo)) {
-        return res
-          .status(400)
-          .json({ error: `ساعت تماس بعدی باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد` });
-      }
-      const combined = jalaliDateTimeToDatetime(b.next_call_date || b.promised_date, b.next_call_time);
-      if (!combined) return res.status(400).json({ error: 'تاریخ/ساعت تماس بعدی نامعتبر است' });
-      nextActionDate = combined;
+    } else if (shouldRetryNegotiator) {
+      newStatus = 'pending_negotiator_recall';
+      nextActionDate = computeNextActionDate(waitRepeatMinutes, negWindow);
       nextAction = 'تماس مذاکره‌کننده';
-    } else if (isLastCall) {
-      // آخرین تماس: next_action_date = الان + wait اکشن جاری؛ تصمیم بعدی توسط موتور استراتژی
-      nextActionDate = addMinutesFromNow(waitMinutes);
+    } else if (b.call_status === 'پاسخگو نبود') {
+      // پاسخگو نبود ولی در repeat_on_results نیست (یا سقف پر شده) → عبور به اقدام بعدی
+      newStatus = 'in_negotiation';
+      nextActionDate = nowDatetime();
+      nextAction = nextActionLabelAfterCall;
+    } else if (willPay) {
+      if (reachedMax) {
+        // آخرین تماس مجاز — تعهد ثبت می‌شود ولی تماس بعدی زمان‌بندی نمی‌شود؛ موتور به اکشن بعدی می‌رود.
+        newStatus = 'in_negotiation';
+        nextActionDate = nowDatetime();
+        nextAction = nextActionLabelAfterCall;
+      } else {
+        // تصمیم به پرداخت: نوبت بعدی = تاریخ تعهد + ساعت انتخابی (باید در بازه مجاز باشد)
+        if (!b.next_call_time) {
+          return res.status(400).json({ error: 'ساعت تماس بعدی اجباری است' });
+        }
+        if (!isTimeWithinAllowedWindow(b.next_call_time, allowedFrom, allowedTo)) {
+          return res
+            .status(400)
+            .json({ error: `ساعت تماس بعدی باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد` });
+        }
+        const combined = jalaliDateTimeToDatetime(b.next_call_date || b.promised_date, b.next_call_time);
+        if (!combined) return res.status(400).json({ error: 'تاریخ/ساعت تماس بعدی نامعتبر است' });
+        nextActionDate = combined;
+        nextAction = 'تماس مذاکره‌کننده';
+      }
+    } else if (reachedMax) {
+      // آخرین تماس مجاز — بدون زمان‌بندی تماس بعدی؛ موتور به اکشن بعدی/شکست استراتژی می‌رود.
+      newStatus = 'in_negotiation';
+      nextActionDate = nowDatetime();
       nextAction = nextActionLabelAfterCall;
     } else {
-      // تماس غیرآخر (ناسزا/عدم پرداخت/پاسخگو نبود): نیازمند تاریخ و ساعت تماس بعدی
+      // پاسخگو بود (ناسزا/عدم پرداخت/نامشخص): مذاکره‌کننده تاریخ و ساعت تماس بعدی را تعیین می‌کند.
       if (!b.next_call_date || !b.next_call_time) {
         return res.status(400).json({ error: 'تاریخ و ساعت تماس بعدی اجباری است' });
       }
@@ -571,13 +612,17 @@ router.post('/:id/call-outcome', async (req, res) => {
       nextAction = 'تماس مذاکره‌کننده';
     }
 
-    // رشته جلالی «تاریخ ساعت» تماس بعدی (برای ثبت در تاریخچه و case_actions)
+    // رشته جلالی «تاریخ ساعت» تماس بعدی که مذاکره‌کننده انتخاب کرده (فقط در حالت پیگیری دستی).
     const scheduledNextCall =
-      !isDeath && !b.refer_to_legal && Boolean(b.next_call_date) && Boolean(b.next_call_time) && (willPay || !isLastCall);
+      !isDeath &&
+      !b.refer_to_legal &&
+      !shouldRetryNegotiator &&
+      Boolean(b.next_call_date) &&
+      Boolean(b.next_call_time);
     const nextCallJalali = scheduledNextCall ? `${b.next_call_date} ${b.next_call_time}` : null;
 
     let cost = 0;
-    if (c.assigned_negotiator_id) {
+    if (!isNoAnswer && c.assigned_negotiator_id) {
       const neg = query('SELECT hourly_wage FROM negotiators WHERE id = $n', {
         $n: c.assigned_negotiator_id,
       })[0];
@@ -591,7 +636,9 @@ router.post('/:id/call-outcome', async (req, res) => {
     if (b.payment_decision) parts.push(`تصمیم به پرداخت: ${b.payment_decision}`);
     if (willPay) parts.push(`تعهد: ${b.promised_amount} ریال در ${b.promised_date}`);
     if (nextCallJalali) parts.push(`تماس بعدی: ${nextCallJalali}`);
-    if (!isDeath && !b.refer_to_legal && isLastCall)
+    if (shouldRetryNegotiator)
+      parts.push(`تکرار تماس — ${b.call_status} (تلاش ${attemptsMade} از ${maxRepeat})`);
+    if (reachedMax && !isDeath && !b.refer_to_legal && !shouldRetryNegotiator)
       parts.push(`آخرین تماس — اقدام بعدی: ${nextActionLabelAfterCall}`);
     if (b.description) parts.push(`توضیحات: ${b.description}`);
     if (b.refer_to_legal) parts.push('ارجاع به حقوقی');
@@ -604,14 +651,15 @@ router.post('/:id/call-outcome', async (req, res) => {
 
     run(
       `INSERT INTO case_actions
-        (case_id, seq, action_type, body_text, result, action_date, cost, call_status, next_call_date)
-       VALUES ($cid, $seq, 'negotiator_call', NULL, $res, $date, $cost, $cs, $ncd)`,
+        (case_id, seq, action_type, body_text, result, action_date, cost, repeat_count, call_status, next_call_date)
+       VALUES ($cid, $seq, 'negotiator_call', NULL, $res, $date, $cost, $rep, $cs, $ncd)`,
       {
         $cid: id,
         $seq: maxSeq + 1,
         $res: resultText,
         $date: nowJalaliDateTime(),
         $cost: cost,
+        $rep: attemptsMade,
         $cs: b.call_status,
         $ncd: nextCallJalali,
       }
@@ -620,6 +668,7 @@ router.post('/:id/call-outcome', async (req, res) => {
     run(
       `UPDATE cases SET
         call_count = $cc,
+        current_action_repeat = $rep,
         case_status = $st,
         next_action = $na,
         next_action_date = $nad,
@@ -628,10 +677,12 @@ router.post('/:id/call-outcome', async (req, res) => {
         last_action_date = $cd,
         case_cost = case_cost + $cost,
         strategy_id = CASE WHEN $clear = 1 THEN NULL ELSE strategy_id END,
+        current_action_seq = CASE WHEN $clear = 1 THEN 0 ELSE current_action_seq END,
         updated_at = datetime('now')
        WHERE id = $id`,
       {
         $cc: newCallCount,
+        $rep: attemptsMade,
         $st: newStatus,
         $na: nextAction,
         $nad: nextActionDate,
@@ -651,7 +702,7 @@ router.post('/:id/call-outcome', async (req, res) => {
       );
     }
 
-    if (b.call_status === 'پاسخگو نبود' && !b.refer_to_legal && !isDeath) {
+    if (b.call_status === 'پاسخگو نبود' && !b.refer_to_legal && !isDeath && shouldRetryNegotiator) {
       await sendSms(c.mobile, NO_ANSWER_SMS_TEXT);
       run(
         `INSERT INTO case_history
@@ -722,9 +773,12 @@ router.post('/:id/call-outcome', async (req, res) => {
       call_duration: callDuration,
       call_cost: cost,
       next_call_date: nextCallJalali,
-      next_call_time: !isDeath && !b.refer_to_legal ? b.next_call_time || null : null,
-      is_last_call: isLastCall,
-      next_action: isLastCall ? nextActionLabelAfterCall : nextAction,
+      next_call_time: scheduledNextCall ? b.next_call_time || null : null,
+      no_answer: isNoAnswer,
+      attempt: attemptsMade,
+      max_repeat: maxRepeat,
+      reached_max: isNoAnswer ? reachedMax : null,
+      next_action: nextAction,
       description: b.description || null,
       refer_to_legal: Boolean(b.refer_to_legal),
     });

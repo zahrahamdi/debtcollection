@@ -10,16 +10,21 @@ const {
   isWithinAllowedWindow,
   calcActionStatus,
   nextAllowedStartDatetime,
+  addMinutesFromNow,
 } = require('../db/dateUtil');
 const { computeCei } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
 const { sendSms, replacePlaceholders } = require('./sms.service');
 const { processDuePartialPaymentResumes } = require('./payment-import.service');
+const { parseRepeatOnResults } = require('../db/strategyActions');
 
 const ELIGIBLE_STATUSES = [
   'pending_strategy_start',
+  'pending_strategy_continue',
   'pending_sms_result',
+  'pending_sms_retry',
   'pending_autocall_result',
+  'pending_autocall_retry',
 ];
 
 const SMS_TYPES = ['warning_sms', 'threatening_sms'];
@@ -33,16 +38,26 @@ const ACTION_LABELS = {
   negotiator_call: 'تماس مذاکره‌کننده',
 };
 
-const AUTOCALL_OUTCOMES = [
-  { label: 'پاسخ داده و لینک دریافت کرد', weight: 20 },
-  { label: 'پاسخ داده اما اقدامی انجام نداد', weight: 15 },
-  { label: 'پاسخگو نبود', weight: 30 },
-  { label: 'خط اشغال بود', weight: 10 },
-  { label: 'خطای اپراتور', weight: 5 },
-  { label: 'شماره موجود نیست', weight: 5 },
-  { label: 'پیغامگیر', weight: 5 },
-  { label: 'پاسخ داده اما تماس را قطع کرد', weight: 10 },
+// نتایج شبیه‌سازی‌شده (Mock) پیامک — weighted random پس از ارسال واقعی/شبیه‌سازی‌شده.
+const SMS_OUTCOMES = [
+  { label: 'ارسال شد', weight: 85, ok: true },
+  { label: 'ارسال نشد', weight: 15, ok: false },
 ];
+
+// نتایج شبیه‌سازی‌شده (Mock) تماس خودکار — weighted random.
+const AUTOCALL_OUTCOMES = [
+  { label: 'پاسخگو بود', weight: 40, answered: true },
+  { label: 'پاسخگو نبود', weight: 40, answered: false },
+  { label: 'اشغال بود', weight: 20, answered: false },
+];
+
+function pickSmsMockOutcome() {
+  return weightedPick(SMS_OUTCOMES);
+}
+
+function pickAutocallMockOutcome() {
+  return weightedPick(AUTOCALL_OUTCOMES);
+}
 
 let running = false;
 
@@ -50,14 +65,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function pickAutocallOutcome() {
-  const total = AUTOCALL_OUTCOMES.reduce((s, o) => s + o.weight, 0);
+function weightedPick(list) {
+  const total = list.reduce((s, o) => s + o.weight, 0);
   let roll = Math.random() * total;
-  for (const o of AUTOCALL_OUTCOMES) {
+  for (const o of list) {
     roll -= o.weight;
-    if (roll <= 0) return o.label;
+    if (roll <= 0) return o;
   }
-  return AUTOCALL_OUTCOMES[0].label;
+  return list[0];
 }
 
 function insertCaseHistory(caseId, debtorId, operation, caseRow, details) {
@@ -68,50 +83,26 @@ dbRun(
       $cid: caseId,
       $did: debtorId,
       $op: operation,
-      $st: caseRow.case_status,
-      $na: caseRow.next_action,
-      $nad: caseRow.next_action_date,
+      $st: caseRow.case_status ?? null,
+      $na: caseRow.next_action ?? null,
+      $nad: caseRow.next_action_date ?? null,
       $det: typeof details === 'string' ? details : JSON.stringify(details),
     }
   );
 }
 
-function getLastExecutedSeq(caseId, strategyId) {
-  const markerRows = query(
-    `SELECT seq FROM case_actions
-     WHERE case_id = $id AND action_type = 'strategy_failure'
-     ORDER BY seq DESC LIMIT 1`,
-    { $id: caseId }
-  );
-  const afterSeq = markerRows[0]?.seq ?? 0;
-
-  const stratActions = query(
-    `SELECT seq, action_type FROM strategy_actions WHERE strategy_id = $sid ORDER BY seq ASC`,
-    { $sid: strategyId }
-  );
-  if (!stratActions.length) return 0;
-
-  const performedRows = query(
-    `SELECT DISTINCT action_type FROM case_actions
-     WHERE case_id = $id AND seq > $after
-       AND action_type NOT IN ('payment_full', 'payment_partial', 'strategy_failure')`,
-    { $id: caseId, $after: afterSeq }
-  );
-  const performed = new Set(performedRows.map((r) => r.action_type));
-
-  let lastSeq = 0;
-  for (const sa of stratActions) {
-    if (performed.has(sa.action_type)) lastSeq = sa.seq;
-    else break;
-  }
-  return lastSeq;
-}
-
-function getNextStrategyAction(strategyId, lastSeq) {
-  const nextSeq = lastSeq > 0 ? lastSeq + 1 : 1;
+function getStrategyActionBySeq(strategyId, seq) {
   const rows = query(
     `SELECT * FROM strategy_actions WHERE strategy_id = $sid AND seq = $seq`,
-    { $sid: strategyId, $seq: nextSeq }
+    { $sid: strategyId, $seq: seq }
+  );
+  return rows[0] || null;
+}
+
+function getNextStrategyActionAfter(strategyId, seq) {
+  const rows = query(
+    `SELECT * FROM strategy_actions WHERE strategy_id = $sid AND seq > $seq ORDER BY seq ASC LIMIT 1`,
+    { $sid: strategyId, $seq: seq }
   );
   return rows[0] || null;
 }
@@ -121,22 +112,21 @@ function updateCaseFields(caseId, fields) {
   const params = { $id: caseId };
   for (const [key, val] of Object.entries(fields)) {
     sets.push(`${key} = $${key}`);
-    params[`$${key}`] = val;
+    params[`$${key}`] = val === undefined ? null : val;
   }
   sets.push(`updated_at = datetime('now')`);
 dbRun(`UPDATE cases SET ${sets.join(', ')} WHERE id = $id`, params);
 }
 
-function recordCaseAction(caseId, action, bodyText, result, cost) {
-  // seq به‌صورت running-max ثبت می‌شود (نه seq اکشن استراتژی) تا با marker شکست استراتژی
-  // هم‌راستا باشد و getLastExecutedSeq به‌درستی پیشرفت را تشخیص دهد.
+function recordCaseAction(caseId, action, bodyText, result, cost, repeatCount = 0) {
+  // seq به‌صورت running-max ثبت می‌شود (ترتیب زمانی درج) تا سابقه به ترتیب صحیح نمایش داده شود.
   const maxSeq = query(
     'SELECT COALESCE(MAX(seq), 0) AS m FROM case_actions WHERE case_id = $id',
     { $id: caseId }
   )[0].m;
   dbRun(
-    `INSERT INTO case_actions (case_id, seq, action_type, body_text, result, action_date, cost)
-     VALUES ($cid, $seq, $type, $body, $result, $date, $cost)`,
+    `INSERT INTO case_actions (case_id, seq, action_type, body_text, result, action_date, cost, repeat_count)
+     VALUES ($cid, $seq, $type, $body, $result, $date, $cost, $rep)`,
     {
       $cid: caseId,
       $seq: maxSeq + 1,
@@ -145,6 +135,7 @@ function recordCaseAction(caseId, action, bodyText, result, cost) {
       $result: result,
       $date: nowJalaliDateTime(),
       $cost: cost,
+      $rep: repeatCount,
     }
   );
 }
@@ -154,10 +145,25 @@ function findDueCases() {
     SELECT c.*, d.first_name, d.last_name, d.mobile
     FROM cases c
     JOIN debtors d ON d.id = c.debtor_id
-    WHERE c.case_status IN ('pending_strategy_start', 'pending_sms_result', 'pending_autocall_result')
+    WHERE c.case_status IN (
+        'pending_strategy_start', 'pending_strategy_continue',
+        'pending_sms_result', 'pending_sms_retry',
+        'pending_autocall_result', 'pending_autocall_retry'
+      )
       AND c.strategy_id IS NOT NULL
   `);
   return rows.filter((c) => isActionDue(c.next_action_date));
+}
+
+function effectiveMaxCallCount(caseRow) {
+  const fromCase = Number(caseRow.max_call_count);
+  if (fromCase > 0) return fromCase;
+  const seq = Number(caseRow.current_action_seq) || 0;
+  const action = getStrategyActionBySeq(caseRow.strategy_id, seq);
+  if (action?.action_type === 'negotiator_call') {
+    return Number(action.max_repeat) || 3;
+  }
+  return 3;
 }
 
 function findDueNegotiatorResultCases() {
@@ -165,12 +171,20 @@ function findDueNegotiatorResultCases() {
     SELECT c.*, d.first_name, d.last_name, d.mobile
     FROM cases c
     JOIN debtors d ON d.id = c.debtor_id
-    WHERE c.case_status = 'in_negotiation'
-      AND c.strategy_id IS NOT NULL
+    WHERE c.strategy_id IS NOT NULL
       AND c.case_status <> 'paid'
       AND COALESCE(c.outstanding_debt, 0) > 0
+      AND (
+        c.case_status = 'in_negotiation'
+        OR c.case_status = 'pending_negotiator_recall'
+      )
   `);
-  return rows.filter((c) => isActionDue(c.next_action_date));
+  return rows.filter((c) => {
+    if (!isActionDue(c.next_action_date)) return false;
+    if (c.case_status === 'in_negotiation') return true;
+    const maxCalls = effectiveMaxCallCount(c);
+    return (Number(c.current_action_repeat) || 0) >= maxCalls;
+  });
 }
 
 function isCaseUnpaid(caseRow) {
@@ -182,81 +196,79 @@ async function processNegotiatorResultDueCase(caseRow) {
     return { skipped: true, reason: 'case_paid' };
   }
 
-  const callCount = Number(caseRow.call_count) || 0;
-  const maxCalls = Number(caseRow.max_call_count) || 0;
+  const attempts = Number(caseRow.current_action_repeat) || 0;
+  const maxCalls = effectiveMaxCallCount(caseRow);
+  const negSeq = Number(caseRow.current_action_seq) || 0;
 
-  if (callCount < maxCalls) {
-    const nextActionDate = nowDatetime();
+  // سقف تماس‌های مذاکره پر شده → اکشن بعدی استراتژی یا شکست استراتژی
+  if (maxCalls > 0 && attempts >= maxCalls) {
+    const currentAction = getStrategyActionBySeq(caseRow.strategy_id, negSeq);
+    const nextObj = getNextStrategyActionAfter(caseRow.strategy_id, negSeq);
+    if (!nextObj) {
+      return handleStrategyFailure(caseRow);
+    }
+    const waitNext = Number(currentAction?.wait_next_minutes) || 0;
+    const nextActionDate = computeNextActionDate(waitNext, nextObj);
+    const nextLabel = ACTION_LABELS[nextObj.action_type] || nextObj.action_type;
     updateCaseFields(caseRow.id, {
-      case_status: 'pending_negotiator_call',
-      next_action: 'تماس مذاکره‌کننده',
+      case_status: 'pending_strategy_continue',
+      current_action_seq: negSeq,
+      current_action_repeat: 0,
+      next_action: nextLabel,
       next_action_date: nextActionDate,
       action_status: calcActionStatus(nextActionDate),
     });
-
-    const snapshot = {
-      case_status: 'pending_negotiator_call',
-      next_action: 'تماس مذاکره‌کننده',
-      next_action_date: nextActionDate,
-    };
-    insertCaseHistory(caseRow.id, caseRow.debtor_id, 'بازگشت به تماس مذاکره‌کننده', snapshot, {
-      call_count: callCount,
-      max_call_count: maxCalls,
-      note: 'سررسید تماس بعدی — تماس باقی‌مانده',
-    });
-
+    insertCaseHistory(
+      caseRow.id,
+      caseRow.debtor_id,
+      'عبور به اقدام بعدی استراتژی',
+      { case_status: 'pending_strategy_continue', next_action: nextLabel, next_action_date: nextActionDate },
+      { from: 'negotiator_call', to_seq: nextObj.seq, attempts, max_call_count: maxCalls }
+    );
     return { ok: true };
   }
 
-  const lastSeq = getLastExecutedSeq(caseRow.id, caseRow.strategy_id);
-  const nextAction = getNextStrategyAction(caseRow.strategy_id, lastSeq);
-
-  if (nextAction) {
-    return processCase(caseRow);
-  }
-
-  return completeStrategy(caseRow);
-}
-
-function upcomingActionLabel(strategyId, afterSeq) {
-  const next = getNextStrategyAction(strategyId, afterSeq);
-  if (!next) return 'تخصیص به حقوقی';
-  return ACTION_LABELS[next.action_type] || next.action_type;
-}
-
-async function executeSmsAction(caseRow, action) {
-  if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
-    return { skipped: true, reason: 'outside_time_window' };
-  }
-
-  const userName = `${caseRow.first_name} ${caseRow.last_name}`.trim();
-  const bodyText = replacePlaceholders(action.body_text, {
-    userName,
-    claimsAmount: caseRow.claims_amount,
-  });
-
-  const sendResult = await sendSms(caseRow.mobile, bodyText);
-  if (!sendResult.ok) {
-    return { skipped: true, reason: 'sms_send_failed' };
-  }
-
-  const smsResultLabel = sendResult.simulated ? 'ارسال شد (شبیه‌سازی)' : 'ارسال شد';
-  const historyOperation = sendResult.simulated ? 'اجرای پیامک (شبیه‌سازی)' : 'اجرای پیامک';
-
-  const waitMinutes = Number(action.wait_minutes) || 0;
-  const nextActionObj = getNextStrategyAction(caseRow.strategy_id, action.seq);
-  const nextActionDate = nextActionObj
-    ? computeNextActionDate(waitMinutes, nextActionObj)
-    : null;
-  const newStatus = 'pending_sms_result';
-  const actionLabel = ACTION_LABELS[action.action_type];
-  const nextLabel = upcomingActionLabel(caseRow.strategy_id, action.seq);
-
-  recordCaseAction(caseRow.id, action, bodyText, smsResultLabel, Number(action.cost) || 0);
-
-  const newCost = (Number(caseRow.case_cost) || 0) + (Number(action.cost) || 0);
+  // هنوز تماس باقی است → بازگشایی تماس مذاکره‌کننده
+  const nextActionDate = nowDatetime();
   updateCaseFields(caseRow.id, {
-    case_status: newStatus,
+    case_status: 'pending_negotiator_call',
+    next_action: 'تماس مذاکره‌کننده',
+    next_action_date: nextActionDate,
+    action_status: calcActionStatus(nextActionDate),
+  });
+  insertCaseHistory(
+    caseRow.id,
+    caseRow.debtor_id,
+    'بازگشت به تماس مذاکره‌کننده',
+    { case_status: 'pending_negotiator_call', next_action: 'تماس مذاکره‌کننده', next_action_date: nextActionDate },
+    { attempts, max_call_count: maxCalls, note: 'سررسید تماس بعدی — تماس باقی‌مانده' }
+  );
+  return { ok: true };
+}
+
+// عبور به اکشن بعدی پس از پر شدن سقف تکرار اکشن جاری (یا شکست استراتژی اگر اکشن بعدی نبود).
+function advanceAfterExhaustion(caseRow, action, newCost, historyNote) {
+  const actionLabel = ACTION_LABELS[action.action_type];
+  const nextObj = getNextStrategyActionAfter(caseRow.strategy_id, action.seq);
+
+  if (!nextObj) {
+    // آخرین اکشن استراتژی بود و به نتیجه نرسید → شکست استراتژی
+    updateCaseFields(caseRow.id, {
+      last_action: actionLabel,
+      last_action_date: todayJalali(),
+      case_cost: newCost,
+      current_action_repeat: 0,
+    });
+    return handleStrategyFailure(caseRow);
+  }
+
+  const waitNext = Number(action.wait_next_minutes) || 0;
+  const nextActionDate = computeNextActionDate(waitNext, nextObj);
+  const nextLabel = ACTION_LABELS[nextObj.action_type] || nextObj.action_type;
+  updateCaseFields(caseRow.id, {
+    case_status: 'pending_strategy_continue',
+    current_action_seq: action.seq,
+    current_action_repeat: 0,
     last_action: actionLabel,
     last_action_date: todayJalali(),
     next_action: nextLabel,
@@ -264,120 +276,246 @@ async function executeSmsAction(caseRow, action) {
     action_status: calcActionStatus(nextActionDate),
     case_cost: newCost,
   });
-
-  const snapshot = {
-    case_status: newStatus,
-    next_action: nextLabel,
-    next_action_date: nextActionDate,
-  };
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, historyOperation, snapshot, bodyText);
-
+  insertCaseHistory(
+    caseRow.id,
+    caseRow.debtor_id,
+    'عبور به اقدام بعدی استراتژی',
+    { case_status: 'pending_strategy_continue', next_action: nextLabel, next_action_date: nextActionDate },
+    { from_seq: action.seq, to_seq: nextObj.seq, note: historyNote }
+  );
   return { ok: true };
 }
 
-async function executeAutocallAction(caseRow, action) {
-  if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
-    return { skipped: true, reason: 'outside_time_window' };
-  }
+// اجرای اقدام پیامک/تماس خودکار با منطق تکرار مشترک.
+// max_repeat = حداکثر تعداد کل اجرای همان اقدام (نه تعداد retry اضافه).
+function automatedAttemptsBefore(caseRow, action) {
+  const curSeq = Number(caseRow.current_action_seq) || 0;
+  if (curSeq !== Number(action.seq)) return 0;
+  return Number(caseRow.current_action_repeat) || 0;
+}
 
-  await sleep(1000 + Math.floor(Math.random() * 2000));
+function advanceAfterAutomatedOutcome(caseRow, action, kind, ctx) {
+  const {
+    outcome,
+    newCost,
+    bodyText,
+    cost,
+    actionLabel,
+    waitNext,
+    attemptsMade,
+  } = ctx;
+  const resultStatus = kind === 'sms' ? 'pending_sms_result' : 'pending_autocall_result';
+  const okHistoryOp = kind === 'sms' ? 'اجرای پیامک' : 'اجرای تماس خودکار';
+  const nextObj = getNextStrategyActionAfter(caseRow.strategy_id, action.seq);
+  const nextActionDate = nextObj ? computeNextActionDate(waitNext, nextObj) : addMinutesFromNow(waitNext);
+  const nextLabel = nextObj ? ACTION_LABELS[nextObj.action_type] || nextObj.action_type : 'شکست استراتژی';
+  updateCaseFields(caseRow.id, {
+    case_status: resultStatus,
+    current_action_seq: action.seq,
+    current_action_repeat: 0,
+    last_action: actionLabel,
+    last_action_date: todayJalali(),
+    next_action: nextLabel,
+    next_action_date: nextActionDate,
+    action_status: calcActionStatus(nextActionDate),
+    case_cost: newCost,
+  });
+  insertCaseHistory(
+    caseRow.id,
+    caseRow.debtor_id,
+    okHistoryOp,
+    { case_status: resultStatus, next_action: nextLabel, next_action_date: nextActionDate },
+    { action_type: action.action_type, result: outcome, cost, attempt: attemptsMade }
+  );
+  return { ok: true };
+}
 
-  const outcome = pickAutocallOutcome();
+function executeAutomatedAction(caseRow, action, kind, picked) {
+  const outcome = picked.label;
   const bodyText = replacePlaceholders(action.body_text, {
     userName: `${caseRow.first_name} ${caseRow.last_name}`.trim(),
     claimsAmount: caseRow.claims_amount,
   });
 
-  const waitMinutes = Number(action.wait_minutes) || 0;
-  const nextActionObj = getNextStrategyAction(caseRow.strategy_id, action.seq);
-  const nextActionDate = nextActionObj
-    ? computeNextActionDate(waitMinutes, nextActionObj)
-    : null;
-  const newStatus = 'pending_autocall_result';
   const actionLabel = ACTION_LABELS[action.action_type];
-  const nextLabel = upcomingActionLabel(caseRow.strategy_id, action.seq);
+  const cost = Number(action.cost) || 0;
+  const newCost = (Number(caseRow.case_cost) || 0) + cost;
+  const maxRepeat = Number(action.max_repeat) || 3;
+  const waitNext = Number(action.wait_next_minutes) || 0;
+  const waitRepeat = Number(action.wait_repeat_minutes) || 0;
+  const attemptsBefore = automatedAttemptsBefore(caseRow, action);
+  const attemptsMade = attemptsBefore + 1;
 
-  recordCaseAction(caseRow.id, action, bodyText, outcome, Number(action.cost) || 0);
+  const retryStatus = kind === 'sms' ? 'pending_sms_retry' : 'pending_autocall_retry';
+  const failHistoryOp =
+    kind === 'sms' ? 'ارسال ناموفق پیامک — تلاش مجدد' : 'تماس خودکار ناموفق — تلاش مجدد';
 
-  const newCost = (Number(caseRow.case_cost) || 0) + (Number(action.cost) || 0);
-  updateCaseFields(caseRow.id, {
-    case_status: newStatus,
-    last_action: actionLabel,
-    last_action_date: todayJalali(),
-    next_action: nextLabel,
-    next_action_date: nextActionDate,
-    action_status: calcActionStatus(nextActionDate),
-    case_cost: newCost,
+  const repeatOn = parseRepeatOnResults(action);
+  const inRepeatList = repeatOn.includes(outcome);
+  const shouldRetry = inRepeatList && attemptsMade < maxRepeat;
+
+  recordCaseAction(caseRow.id, action, bodyText, outcome, cost, attemptsMade);
+
+  if (shouldRetry) {
+    const nextActionDate = computeNextActionDate(waitRepeat, action);
+    updateCaseFields(caseRow.id, {
+      case_status: retryStatus,
+      current_action_seq: action.seq,
+      current_action_repeat: attemptsMade,
+      last_action: actionLabel,
+      last_action_date: todayJalali(),
+      next_action: actionLabel,
+      next_action_date: nextActionDate,
+      action_status: calcActionStatus(nextActionDate),
+      case_cost: newCost,
+    });
+    insertCaseHistory(
+      caseRow.id,
+      caseRow.debtor_id,
+      failHistoryOp,
+      { case_status: retryStatus, next_action: actionLabel, next_action_date: nextActionDate },
+      {
+        action_type: action.action_type,
+        result: outcome,
+        attempt: attemptsMade,
+        max_repeat: maxRepeat,
+        repeat_on_results: repeatOn,
+      }
+    );
+    return { ok: true };
+  }
+
+  if (inRepeatList && attemptsMade >= maxRepeat) {
+    insertCaseHistory(
+      caseRow.id,
+      caseRow.debtor_id,
+      failHistoryOp,
+      {
+        case_status: caseRow.case_status,
+        next_action: actionLabel,
+        next_action_date: caseRow.next_action_date ?? null,
+      },
+      {
+        action_type: action.action_type,
+        result: outcome,
+        attempt: attemptsMade,
+        max_repeat: maxRepeat,
+        exhausted: true,
+        repeat_on_results: repeatOn,
+      }
+    );
+    return advanceAfterExhaustion(caseRow, action, newCost, `${outcome} — سقف تکرار (${maxRepeat}) پر شد`);
+  }
+
+  return advanceAfterAutomatedOutcome(caseRow, action, kind, {
+    outcome,
+    newCost,
+    bodyText,
+    cost,
+    actionLabel,
+    waitNext,
+    attemptsMade,
   });
+}
 
-  const snapshot = {
-    case_status: newStatus,
-    next_action: nextLabel,
-    next_action_date: nextActionDate,
-  };
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, 'اجرای تماس خودکار', snapshot, {
-    action_type: action.action_type,
-    result: outcome,
-    cost: action.cost,
+async function executeSmsAction(caseRow, action) {
+  if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
+    const nad = nextAllowedStartDatetime(action.allowed_from);
+    updateCaseFields(caseRow.id, { next_action_date: nad, action_status: calcActionStatus(nad) });
+    return { skipped: true, reason: 'outside_time_window' };
+  }
+
+  const maxRepeat = Number(action.max_repeat) || 3;
+  const attemptsBefore = automatedAttemptsBefore(caseRow, action);
+  if (attemptsBefore >= maxRepeat) {
+    const newCost = Number(caseRow.case_cost) || 0;
+    return advanceAfterExhaustion(
+      caseRow,
+      action,
+      newCost,
+      `سقف تکرار (${maxRepeat}) قبلاً پر شده — بدون ارسال مجدد`
+    );
+  }
+
+  const bodyText = replacePlaceholders(action.body_text, {
+    userName: `${caseRow.first_name} ${caseRow.last_name}`.trim(),
+    claimsAmount: caseRow.claims_amount,
   });
+  await sendSms(caseRow.mobile, bodyText);
+  const picked = pickSmsMockOutcome();
+  return executeAutomatedAction(caseRow, action, 'sms', picked);
+}
 
-  return { ok: true };
+async function executeAutocallAction(caseRow, action) {
+  if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
+    const nad = nextAllowedStartDatetime(action.allowed_from);
+    updateCaseFields(caseRow.id, { next_action_date: nad, action_status: calcActionStatus(nad) });
+    return { skipped: true, reason: 'outside_time_window' };
+  }
+
+  const maxRepeat = Number(action.max_repeat) || 3;
+  const attemptsBefore = automatedAttemptsBefore(caseRow, action);
+  if (attemptsBefore >= maxRepeat) {
+    const newCost = Number(caseRow.case_cost) || 0;
+    return advanceAfterExhaustion(
+      caseRow,
+      action,
+      newCost,
+      `سقف تکرار (${maxRepeat}) قبلاً پر شده — بدون تماس مجدد`
+    );
+  }
+
+  await sleep(1000 + Math.floor(Math.random() * 2000));
+  const picked = pickAutocallMockOutcome();
+  return executeAutomatedAction(caseRow, action, 'autocall', picked);
 }
 
 function executeNegotiatorCallAction(caseRow, action) {
   const actionLabel = ACTION_LABELS.negotiator_call;
+  const maxRepeat = Number(action.max_repeat) || 3;
+  const common = {
+    current_action_seq: action.seq,
+    current_action_repeat: 0,
+    max_call_count: maxRepeat,
+    last_action: actionLabel,
+    last_action_date: todayJalali(),
+  };
 
   // اگر پرونده از قبل مذاکره‌کننده دارد، مرحله تخصیص را رد می‌کنیم و
   // مستقیم به «در انتظار تماس مذاکره‌کننده» می‌بریم.
   if (caseRow.assigned_negotiator_id) {
     const nextActionDate = nowDatetime();
-
-    recordCaseAction(caseRow.id, action, null, 'در انتظار تماس', 0);
-
     updateCaseFields(caseRow.id, {
+      ...common,
       case_status: 'pending_negotiator_call',
-      last_action: actionLabel,
-      last_action_date: todayJalali(),
       next_action: 'تماس مذاکره‌کننده',
       next_action_date: nextActionDate,
       action_status: calcActionStatus(nextActionDate),
     });
-
-    const snapshot = {
-      case_status: 'pending_negotiator_call',
-      next_action: 'تماس مذاکره‌کننده',
-      next_action_date: nextActionDate,
-    };
-    insertCaseHistory(caseRow.id, caseRow.debtor_id, 'ارجاع به مذاکره‌کننده', snapshot, {
-      action_type: action.action_type,
-      note: 'مذاکره‌کننده از قبل تخصیص یافته — مرحله تخصیص رد شد',
-    });
-
+    insertCaseHistory(
+      caseRow.id,
+      caseRow.debtor_id,
+      'ارجاع به مذاکره‌کننده',
+      { case_status: 'pending_negotiator_call', next_action: 'تماس مذاکره‌کننده', next_action_date: nextActionDate },
+      { action_type: action.action_type, note: 'مذاکره‌کننده از قبل تخصیص یافته — مرحله تخصیص رد شد' }
+    );
     return { ok: true };
   }
 
-  const newStatus = 'pending_negotiator_assignment';
-
-  recordCaseAction(caseRow.id, action, null, 'در انتظار تخصیص', 0);
-
   updateCaseFields(caseRow.id, {
-    case_status: newStatus,
-    last_action: actionLabel,
-    last_action_date: todayJalali(),
+    ...common,
+    case_status: 'pending_negotiator_assignment',
     next_action: 'تخصیص به مذاکره‌کننده',
     next_action_date: null,
     action_status: 'waiting',
   });
-
-  const snapshot = {
-    case_status: newStatus,
-    next_action: 'تخصیص به مذاکره‌کننده',
-    next_action_date: null,
-  };
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, 'ارجاع به مذاکره‌کننده', snapshot, {
-    action_type: action.action_type,
-  });
-
+  insertCaseHistory(
+    caseRow.id,
+    caseRow.debtor_id,
+    'ارجاع به مذاکره‌کننده',
+    { case_status: 'pending_negotiator_assignment', next_action: 'تخصیص به مذاکره‌کننده', next_action_date: null },
+    { action_type: action.action_type }
+  );
   return { ok: true };
 }
 
@@ -576,6 +714,8 @@ function handleStrategyFailure(caseRow) {
       next_action_date: null,
       action_status: 'waiting',
       strategy_id: null,
+      current_action_seq: 0,
+      current_action_repeat: 0,
     });
 
     const snapshot = {
@@ -632,6 +772,8 @@ function handleStrategyFailure(caseRow) {
     next_action_date: nextActionDate,
     action_status: calcActionStatus(nextActionDate),
     max_call_count: maxCalls,
+    current_action_seq: 0,
+    current_action_repeat: 0,
   });
 
   recordStrategyFailureMarker(caseRow.id, failedStrategyTitle);
@@ -663,6 +805,8 @@ function completeStrategyLegalOnly(caseRow, failedStrategyTitle) {
     next_action_date: null,
     action_status: 'waiting',
     strategy_id: null,
+    current_action_seq: 0,
+    current_action_repeat: 0,
   });
   const snapshot = {
     case_status: 'pending_legal_assignment',
@@ -677,29 +821,36 @@ function completeStrategyLegalOnly(caseRow, failedStrategyTitle) {
   return { ok: true, lastSegment: true };
 }
 
-function completeStrategy(caseRow) {
-  return handleStrategyFailure(caseRow);
-}
-
 async function processCase(caseRow) {
-  const lastSeq = getLastExecutedSeq(caseRow.id, caseRow.strategy_id);
-  const nextAction = getNextStrategyAction(caseRow.strategy_id, lastSeq);
+  const status = caseRow.case_status;
+  const curSeq = Number(caseRow.current_action_seq) || 0;
+  const isRetry = status === 'pending_sms_retry' || status === 'pending_autocall_retry';
+  const isContinue = status === 'pending_strategy_continue';
 
-  if (!nextAction) {
-    return completeStrategy(caseRow);
-  }
-
-  if (SMS_TYPES.includes(nextAction.action_type)) {
-    return executeSmsAction(caseRow, nextAction);
-  }
-  if (AUTOCALL_TYPES.includes(nextAction.action_type)) {
-    return executeAutocallAction(caseRow, nextAction);
-  }
-  if (nextAction.action_type === 'negotiator_call') {
-    return executeNegotiatorCallAction(caseRow, nextAction);
+  let action;
+  if (isRetry) {
+    action = getStrategyActionBySeq(caseRow.strategy_id, curSeq);
+  } else if (isContinue || curSeq > 0) {
+    action = getNextStrategyActionAfter(caseRow.strategy_id, curSeq);
+  } else {
+    action = getFirstStrategyAction(caseRow.strategy_id);
   }
 
-  console.warn('[strategy-engine] نوع اکشن ناشناخته:', nextAction.action_type);
+  if (!action) {
+    return handleStrategyFailure(caseRow);
+  }
+
+  if (SMS_TYPES.includes(action.action_type)) {
+    return executeSmsAction(caseRow, action);
+  }
+  if (AUTOCALL_TYPES.includes(action.action_type)) {
+    return executeAutocallAction(caseRow, action);
+  }
+  if (action.action_type === 'negotiator_call') {
+    return executeNegotiatorCallAction(caseRow, action);
+  }
+
+  console.warn('[strategy-engine] نوع اکشن ناشناخته:', action.action_type);
   return { skipped: true, reason: 'unknown_action_type' };
 }
 

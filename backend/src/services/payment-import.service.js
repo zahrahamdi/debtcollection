@@ -271,7 +271,8 @@ function assignStrategyFromStart(caseId, segmentId, creditType, caseSnapshot) {
   run(
     `UPDATE cases SET strategy_id = $sid, case_status = 'pending_strategy_start',
      next_action = $na, next_action_date = $nad, action_status = $as,
-     max_call_count = $mc, updated_at = datetime('now') WHERE id = $id`,
+     max_call_count = $mc, current_action_seq = 0, current_action_repeat = 0,
+     updated_at = datetime('now') WHERE id = $id`,
     {
       $sid: strategy.id,
       $na: nextAction,

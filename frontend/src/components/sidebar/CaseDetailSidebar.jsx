@@ -65,7 +65,7 @@ function isPaymentAction(actionType) {
   return actionType === 'payment_full' || actionType === 'payment_partial'
 }
 
-const NEGOTIATOR_CALL_STATUSES = ['pending_negotiator_call', 'in_negotiation']
+const NEGOTIATOR_CALL_STATUSES = ['pending_negotiator_call', 'pending_negotiator_recall', 'in_negotiation']
 
 function canUserRegisterCall(detail) {
   if (!detail) return false
@@ -81,6 +81,10 @@ function canUserRegisterCall(detail) {
 }
 
 function canRegisterCall(detail) {
+  const maxCalls =
+    Number(detail.max_call_count) || Number(detail.negotiator_stage?.max_repeat) || 3
+  const attempts = Number(detail.current_action_repeat) || 0
+  if (attempts >= maxCalls) return false
   return (
     Boolean(detail) &&
     NEGOTIATOR_CALL_STATUSES.includes(detail.case_status) &&
@@ -92,6 +96,7 @@ function canRegisterCall(detail) {
 const NEGOTIATOR_RESULT_BY_STATUS = {
   pending_negotiator_assignment: 'در انتظار تخصیص',
   pending_negotiator_call: 'در انتظار تماس',
+  pending_negotiator_recall: 'در انتظار تماس مجدد',
   in_negotiation: 'در انتظار نتیجه تماس',
 }
 
@@ -398,8 +403,13 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                         <div className="mt-1 text-xs text-slate-400">نتیجه: در انتظار ثبت خروجی تماس</div>
                         <div className="mt-2 border-t border-slate-100 pt-2">
                           <div className="mb-2 text-[11px] text-slate-400">
-                            نمایش تماس شماره {toFaDigits((detail.current_strategy_call_count ?? 0) + 1)} از{' '}
-                            {toFaDigits(orDash(detail.max_call_count))}
+                            نمایش تماس شماره{' '}
+                            {toFaDigits((Number(detail.current_action_repeat) || 0) + 1)} از{' '}
+                            {toFaDigits(
+                              Number(detail.max_call_count) ||
+                                Number(detail.negotiator_stage?.max_repeat) ||
+                                3
+                            )}
                           </div>
                           <button
                             type="button"

@@ -100,33 +100,41 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
   const stage = caseRow?.negotiator_stage || null
   const allowedFrom = stage?.allowed_from || '09:00'
   const allowedTo = stage?.allowed_to || '18:00'
-  const waitMinutes = Number(stage?.wait_minutes) || 0
+  const waitMinutes = Number(stage?.wait_next_minutes ?? stage?.wait_minutes) || 0
+  const waitRepeatMinutes = Number(stage?.wait_repeat_minutes) || 0
   const nextActionLabel = stage?.next_action_label || 'شکست استراتژی'
 
-  // فقط تماس‌های استراتژی فعلی شمرده می‌شوند (بعد از شروع استراتژی فعلی پرونده)
-  const callCount = Number(caseRow?.current_strategy_call_count) || 0
-  const maxCalls = Number(caseRow?.max_call_count) || 0
-  const isLastCall = maxCalls > 0 && callCount + 1 >= maxCalls
+  // تعداد تماس‌های انجام‌شده روی اقدام مذاکرهٔ جاری (هم‌تراز با backend)
+  const attemptsSoFar = Number(caseRow?.current_action_repeat) || 0
+  const maxCalls = Number(caseRow?.max_call_count) || Number(stage?.max_repeat) || 3
+  const isNoAnswer = form.call_status === 'پاسخگو نبود'
+  const durationRequired =
+    form.call_status === 'پاسخگو بود' || form.call_status === 'ناسزا گفت'
+  const reachedMax = attemptsSoFar + 1 >= maxCalls
 
   // تعیین حالت فیلدهای تماس بعدی
+  //  - noanswer: تماس مجدد خودکار (فیلد تماس بعدی مخفی).
+  //  - last: آخرین تماس مجاز — بدون زمان‌بندی تماس بعدی.
+  //  - willpay: تاریخ = تاریخ تعهد، ساعت قابل ویرایش.
+  //  - followup: پاسخگو بود ولی تعهد ندارد → مذاکره‌کننده تاریخ و ساعت را تعیین می‌کند.
   let mode
-  if (willPay) mode = 'willpay'
-  else if (isLastCall) mode = 'last'
-  else if (form.call_status === 'پاسخگو نبود') mode = 'noanswer'
+  if (isNoAnswer) mode = 'noanswer'
+  else if (reachedMax) mode = 'last'
+  else if (willPay) mode = 'willpay'
   else mode = 'followup'
 
-  const showNextCall = mode !== 'last'
+  const showNextCall = mode !== 'noanswer' && mode !== 'last'
   const dateEditable = mode === 'followup'
   const timeEditable = mode === 'willpay' || mode === 'followup'
 
   // autofill تاریخ/ساعت تماس بعدی بر اساس حالت
   useEffect(() => {
-    if (!open || mode === 'last') return
+    if (!open || mode === 'noanswer' || mode === 'last') return
     if (mode === 'willpay') {
       // تاریخ = تاریخ تعهد (readonly، از فیلد promised_date خوانده می‌شود)، ساعت = ساعت فعلی (قابل ویرایش)
       setForm((f) => ({ ...f, next_call_time: hhmmFromOffset(0) }))
     } else {
-      // noanswer / followup: تاریخ و ساعت = الان + wait
+      // followup: تاریخ و ساعت پیش‌فرض = الان + wait (قابل ویرایش)
       setForm((f) => ({
         ...f,
         next_call_date: jalaliDateFromOffset(waitMinutes),
@@ -142,9 +150,11 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.call_status) return setError('وضعیت تماس را انتخاب کنید.')
-    const duration = Number(toEnDigits(form.call_duration))
-    if (!form.call_duration || Number.isNaN(duration) || duration <= 0)
-      return setError('مدت تماس به دقیقه اجباری است.')
+    const duration = isNoAnswer ? 0 : Number(toEnDigits(form.call_duration))
+    if (durationRequired) {
+      if (!form.call_duration || Number.isNaN(duration) || duration <= 0)
+        return setError('مدت تماس به دقیقه اجباری است.')
+    }
 
     if (willPay) {
       if (!form.promised_date || form.promised_amount === '')
@@ -159,8 +169,8 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
         return setError(`تاریخ تعهد نباید بیش از ${toFaDigits(maxPromiseDays)} روز از امروز باشد.`)
     }
 
-    // اعتبارسنجی تاریخ/ساعت تماس بعدی (به‌جز حالت آخرین تماس که مخفی است)
-    if (mode !== 'last') {
+    // اعتبارسنجی تاریخ/ساعت تماس بعدی (در حالت عدم پاسخگویی مخفی و توسط سیستم تعیین می‌شود)
+    if (showNextCall) {
       const dateStr = willPay ? form.promised_date : form.next_call_date
       const timeStr = toEnDigits(form.next_call_time)
       if (!dateStr || !timeStr) return setError('تاریخ و ساعت تماس بعدی اجباری است.')
@@ -176,12 +186,11 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
     setSaving(true)
     setError('')
     try {
-      const nextCallDate =
-        mode === 'last'
-          ? null
-          : willPay
-            ? toEnDigits(form.promised_date)
-            : toEnDigits(form.next_call_date)
+      const nextCallDate = !showNextCall
+        ? null
+        : willPay
+          ? toEnDigits(form.promised_date)
+          : toEnDigits(form.next_call_date)
       await submitCallOutcome(caseRow.id, {
         call_status: form.call_status,
         call_duration: duration,
@@ -190,7 +199,7 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
         promised_date: willPay ? toEnDigits(form.promised_date) : null,
         promised_amount: willPay ? Number(toEnDigits(form.promised_amount)) : null,
         next_call_date: nextCallDate,
-        next_call_time: mode === 'last' ? null : toEnDigits(form.next_call_time),
+        next_call_time: !showNextCall ? null : toEnDigits(form.next_call_time),
         description: form.description || null,
         refer_to_legal: form.refer_to_legal,
         send_payment_link: form.send_payment_link,
@@ -242,7 +251,7 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
             </span>
           </div>
           <div className="rounded-xl bg-brand-50 px-3 py-2 text-center text-sm font-medium text-brand-700">
-            تماس {toFaDigits(callCount + 1)} از {toFaDigits(maxCalls)}
+            تماس {toFaDigits(attemptsSoFar + 1)} از {toFaDigits(maxCalls)}
           </div>
         </div>
       )}
@@ -257,7 +266,13 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
           <select
             className={fieldClass}
             value={form.call_status}
-            onChange={(e) => set({ call_status: e.target.value })}
+            onChange={(e) => {
+              const status = e.target.value
+              set({
+                call_status: status,
+                ...(status === 'پاسخگو نبود' ? { call_duration: '' } : {}),
+              })
+            }}
           >
             <option value="" disabled>
               انتخاب کنید
@@ -269,14 +284,18 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
         </div>
 
         <div>
-          <label className={labelClass}>مدت تماس به دقیقه</label>
+          <label className={labelClass}>
+            مدت تماس به دقیقه
+            {durationRequired && <span className="text-rose-500"> *</span>}
+          </label>
           <input
             type="number"
             dir="ltr"
-            min="1"
-            className={fieldClass}
-            placeholder="مثلاً ۵"
-            value={form.call_duration}
+            min={durationRequired ? 1 : 0}
+            className={isNoAnswer ? disabledFieldClass : fieldClass}
+            placeholder={isNoAnswer ? '—' : 'مثلاً ۵'}
+            value={isNoAnswer ? '' : form.call_duration}
+            disabled={isNoAnswer}
             onChange={(e) => set({ call_duration: e.target.value })}
           />
         </div>
@@ -369,9 +388,24 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
           </div>
         ) : (
           <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            این آخرین تماس مذاکره‌کننده است. زمان اقدام بعدی به‌صورت خودکار «اکنون + {toFaDigits(waitMinutes)} دقیقه»
-            تنظیم می‌شود.
-            <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
+            {mode === 'last' ? (
+              <>
+                این آخرین تماس مجاز مذاکره‌کننده در این استراتژی است. تماس بعدی زمان‌بندی نمی‌شود و
+                سیستم به‌طور خودکار به اقدام بعدی استراتژی می‌رود.
+                <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
+              </>
+            ) : reachedMax ? (
+              <>
+                این آخرین تماس مجاز است. وضعیت «در انتظار تماس مجدد مذاکره‌کننده» ثبت می‌شود و سیستم
+                به‌طور خودکار به اقدام بعدی استراتژی می‌رود.
+                <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
+              </>
+            ) : (
+              <>
+                عدم پاسخگویی ثبت می‌شود و سیستم زمان تماس مجدد را به‌صورت خودکار «اکنون +{' '}
+                {toFaDigits(waitRepeatMinutes)} دقیقه» تنظیم می‌کند (تا سقف تکرار).
+              </>
+            )}
           </div>
         )}
 

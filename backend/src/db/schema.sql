@@ -97,17 +97,19 @@ CREATE TABLE IF NOT EXISTS strategies (
 -- انواع: warning_sms | threatening_sms | warning_autocall | threatening_autocall | negotiator_call
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS strategy_actions (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  strategy_id       INTEGER NOT NULL,
-  seq               INTEGER NOT NULL DEFAULT 0,            -- ترتیب اجرا
-  action_type       TEXT    NOT NULL,
-  body_text         TEXT,                                  -- متن پیامک یا محتوای تماس (SMS/Autocall)
-  allowed_from      TEXT,                                  -- شروع بازه زمانی مجاز (HH:MM)
-  allowed_to        TEXT,                                  -- پایان بازه زمانی مجاز (HH:MM)
-  wait_minutes      INTEGER NOT NULL DEFAULT 0,            -- زمان انتظار برای اکشن بعدی (دقیقه)
-  cost              INTEGER NOT NULL DEFAULT 0,            -- هزینه هر پیامک/تماس (برای تماس مذاکره‌کننده محاسبه‌شونده)
-  max_repeat        INTEGER,                               -- حداکثر تکرار (فقط Negotiator Call)
-  avg_call_duration INTEGER,                               -- میانگین مدت تماس به دقیقه (فقط Negotiator Call)
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_id        INTEGER NOT NULL,
+  seq                INTEGER NOT NULL DEFAULT 0,           -- ترتیب اجرا
+  action_type        TEXT    NOT NULL,
+  body_text          TEXT,                                 -- متن پیامک یا محتوای تماس (SMS/Autocall)
+  allowed_from       TEXT,                                 -- شروع بازه زمانی مجاز (HH:MM)
+  allowed_to         TEXT,                                 -- پایان بازه زمانی مجاز (HH:MM)
+  wait_next_minutes  INTEGER NOT NULL DEFAULT 0,           -- فاصله قبل از اکشن بعدی (دقیقه)
+  wait_repeat_minutes INTEGER NOT NULL DEFAULT 60,         -- فاصله بین تکرار همان اکشن (دقیقه)
+  cost               INTEGER NOT NULL DEFAULT 0,           -- هزینه هر پیامک/تماس (برای تماس مذاکره‌کننده محاسبه‌شونده)
+  max_repeat         INTEGER NOT NULL DEFAULT 3,           -- حداکثر تکرار همان اکشن (برای همه انواع اکشن)
+  repeat_on_results  TEXT,                                 -- JSON array — نتایجی که باعث تکرار همان اقدام می‌شوند
+  avg_call_duration  INTEGER,                              -- میانگین مدت تماس به دقیقه (فقط Negotiator Call)
   FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_strategy_actions ON strategy_actions(strategy_id, seq);
@@ -164,7 +166,9 @@ CREATE TABLE IF NOT EXISTS cases (
   case_cost          INTEGER NOT NULL DEFAULT 0,           -- هزینه پرونده (مجموع هزینه اکشن‌ها)
 
   call_count         INTEGER NOT NULL DEFAULT 0,           -- تعداد تماس‌های انجام‌شده
-  max_call_count     INTEGER,                              -- حداکثر تماس مجاز
+  max_call_count     INTEGER,                              -- حداکثر تماس مجاز (= max_repeat اکشن مذاکره)
+  current_action_seq INTEGER NOT NULL DEFAULT 0,           -- seq اکشن استراتژی در حال اجرا
+  current_action_repeat INTEGER NOT NULL DEFAULT 0,        -- تعداد تلاش‌های انجام‌شده روی اکشن جاری
   previous_case_id   INTEGER,                              -- لینک به پرونده قبلی (پرداخت‌شده)
 
   -- خلاصه اقساط (از فایل Excel/Sheet — بخش ۴ PRD)
@@ -248,6 +252,7 @@ CREATE TABLE IF NOT EXISTS case_actions (
   result      TEXT,                                        -- نتیجه اقدام
   action_date TEXT,                                        -- تاریخ انجام
   cost        INTEGER NOT NULL DEFAULT 0,                  -- هزینه اکشن
+  repeat_count INTEGER NOT NULL DEFAULT 0,                 -- تعداد تکرار این اکشن تا این تلاش
   -- فیلدهای خروجی تماس مذاکره‌کننده (در صورت وجود)
   call_status TEXT,                                        -- پاسخگو بود / پاسخگو نبود / ناسزا گفت
   next_call_date TEXT,                                     -- زمان تماس بعدی

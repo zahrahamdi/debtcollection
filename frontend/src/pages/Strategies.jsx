@@ -9,7 +9,7 @@ import {
   deleteStrategy,
 } from '../api/strategies'
 import { fetchSegments } from '../api/segments'
-import StrategyActionsBuilder from '../components/admin/StrategyActionsBuilder'
+import StrategyActionsBuilder, { normalizeStrategyAction } from '../components/admin/StrategyActionsBuilder'
 import AbTestModal from '../components/admin/AbTestModal'
 import { currentUser, isAdmin } from '../utils/auth'
 import { toFaDigits, orDash } from '../utils/format'
@@ -78,7 +78,10 @@ export default function Strategies() {
     setModalOpen(true)
     try {
       const detail = await fetchStrategyById(s.id)
-      setForm((f) => ({ ...f, actions: detail?.actions ?? [] }))
+      setForm((f) => ({
+        ...f,
+        actions: (detail?.actions ?? []).map(normalizeStrategyAction),
+      }))
     } catch (e) {
       console.error(e)
     }
@@ -351,7 +354,7 @@ export default function Strategies() {
             )}
           </div>
 
-          {/* بیلدر اکشن‌ها */}
+          {/* بیلدر اقدام‌ها */}
           <div className="border-t border-slate-100 pt-4">
             <StrategyActionsBuilder
               actions={form.actions}

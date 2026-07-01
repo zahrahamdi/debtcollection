@@ -246,10 +246,14 @@ export default function Reports() {
                 </h3>
                 <dl className="space-y-2 text-sm">
                   {[
+                    ['pending_strategy_continue', 'در انتظار ادامه استراتژی'],
                     ['pending_sms_result', 'در انتظار نتیجه پیامک'],
+                    ['pending_sms_retry', 'در انتظار ارسال مجدد پیامک'],
                     ['pending_autocall_result', 'در انتظار نتیجه تماس خودکار'],
+                    ['pending_autocall_retry', 'در انتظار تماس خودکار مجدد'],
                     ['pending_negotiator_assignment', 'در انتظار تخصیص به مذاکره‌کننده'],
                     ['pending_negotiator_call', 'در انتظار تماس مذاکره‌کننده'],
+                    ['pending_negotiator_recall', 'در انتظار تماس مجدد مذاکره‌کننده'],
                     ['in_negotiation', 'در انتظار نتیجه تماس مذاکره‌کننده'],
                     ['pending_legal_assignment', 'در انتظار تخصیص به حقوقی'],
                     ['burned', 'سوخت شده'],
@@ -292,18 +296,18 @@ export default function Reports() {
               </div>
             </div>
 
-            {/* نرخ تبدیل اکشن‌ها */}
+            {/* نرخ تبدیل اقدام‌ها */}
             <div className="rounded-2xl border border-slate-200 bg-white shadow-panel">
               <div className="border-b border-slate-100 px-4 py-3">
-                <h3 className="text-sm font-bold text-slate-700">نرخ تبدیل اکشن‌ها</h3>
+                <h3 className="text-sm font-bold text-slate-700">نرخ تبدیل اقدام‌ها</h3>
               </div>
               <div className="overflow-auto">
                 <table className="w-full min-w-[600px] border-collapse text-right text-sm">
                   <thead>
                     <tr className="bg-slate-50/80 text-xs text-slate-500">
-                      <th className="px-4 py-3">نوع اکشن</th>
+                      <th className="px-4 py-3">نوع اقدام</th>
                       <th className="px-4 py-3">تعداد اجرا</th>
-                      <th className="px-4 py-3">پرداخت بعد از اکشن</th>
+                      <th className="px-4 py-3">پرداخت بعد از اقدام</th>
                       <th className="px-4 py-3">نرخ تبدیل</th>
                     </tr>
                   </thead>

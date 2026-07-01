@@ -77,12 +77,65 @@ function migrateSchema(database) {
     console.log('[db] migration: wait_days → wait_minutes (مقدار × ۱۴۴۰)');
   }
 
+  // wait_minutes → wait_next_minutes (ستون جدید ساخته و مقدار کپی می‌شود)
+  if (!colNames.includes('wait_next_minutes')) {
+    database.run('ALTER TABLE strategy_actions ADD COLUMN wait_next_minutes INTEGER NOT NULL DEFAULT 0');
+    if (colNames.includes('wait_minutes')) {
+      database.run('UPDATE strategy_actions SET wait_next_minutes = COALESCE(wait_minutes, 0)');
+    }
+    console.log('[db] migration: strategy_actions.wait_next_minutes added');
+  }
+  if (!colNames.includes('wait_repeat_minutes')) {
+    database.run('ALTER TABLE strategy_actions ADD COLUMN wait_repeat_minutes INTEGER NOT NULL DEFAULT 60');
+    console.log('[db] migration: strategy_actions.wait_repeat_minutes added');
+  }
+  // max_repeat باید روی همه انواع اکشن مقدار داشته باشد (پیش‌فرض ۳)
+  if (!colNames.includes('max_repeat')) {
+    database.run('ALTER TABLE strategy_actions ADD COLUMN max_repeat INTEGER NOT NULL DEFAULT 3');
+    console.log('[db] migration: strategy_actions.max_repeat added');
+  }
+  database.run('UPDATE strategy_actions SET max_repeat = 3 WHERE max_repeat IS NULL OR max_repeat = 0');
+
+  if (!colNames.includes('repeat_on_results')) {
+    database.run('ALTER TABLE strategy_actions ADD COLUMN repeat_on_results TEXT');
+    database.run(
+      `UPDATE strategy_actions SET repeat_on_results = '["ارسال نشد"]'
+       WHERE action_type IN ('warning_sms', 'threatening_sms')`
+    );
+    database.run(
+      `UPDATE strategy_actions SET repeat_on_results = '["پاسخگو نبود","اشغال بود"]'
+       WHERE action_type IN ('warning_autocall', 'threatening_autocall')`
+    );
+    database.run(
+      `UPDATE strategy_actions SET repeat_on_results = '["پاسخگو نبود"]'
+       WHERE action_type = 'negotiator_call'`
+    );
+    console.log('[db] migration: strategy_actions.repeat_on_results added');
+  }
+
   const casesInfo = database.exec('PRAGMA table_info(cases)');
   if (casesInfo.length) {
     const caseCols = casesInfo[0].values.map((row) => row[1]);
     if (!caseCols.includes('cei_boost')) {
       database.run('ALTER TABLE cases ADD COLUMN cei_boost REAL NOT NULL DEFAULT 0');
       console.log('[db] migration: cases.cei_boost added');
+    }
+    if (!caseCols.includes('current_action_seq')) {
+      database.run('ALTER TABLE cases ADD COLUMN current_action_seq INTEGER NOT NULL DEFAULT 0');
+      console.log('[db] migration: cases.current_action_seq added');
+    }
+    if (!caseCols.includes('current_action_repeat')) {
+      database.run('ALTER TABLE cases ADD COLUMN current_action_repeat INTEGER NOT NULL DEFAULT 0');
+      console.log('[db] migration: cases.current_action_repeat added');
+    }
+  }
+
+  const actionsInfo = database.exec('PRAGMA table_info(case_actions)');
+  if (actionsInfo.length) {
+    const actionCols = actionsInfo[0].values.map((row) => row[1]);
+    if (!actionCols.includes('repeat_count')) {
+      database.run('ALTER TABLE case_actions ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 0');
+      console.log('[db] migration: case_actions.repeat_count added');
     }
   }
 }
@@ -111,10 +164,20 @@ function getDb() {
  * @param {object|Array} [params] پارامترهای bind ($name یا ?)
  * @returns {Array<object>}
  */
+/** sql.js مقدار undefined را قبول نمی‌کند — به null تبدیل می‌شود. */
+function sanitizeParams(params) {
+  if (!params || typeof params !== 'object') return params;
+  const out = {};
+  for (const [key, val] of Object.entries(params)) {
+    out[key] = val === undefined ? null : val;
+  }
+  return out;
+}
+
 function query(sql, params = {}) {
   const stmt = getDb().prepare(sql);
   try {
-    stmt.bind(params);
+    stmt.bind(sanitizeParams(params));
     const rows = [];
     while (stmt.step()) {
       rows.push(stmt.getAsObject());
@@ -136,7 +199,7 @@ function run(sql, params = {}) {
   const database = getDb();
   const stmt = database.prepare(sql);
   try {
-    stmt.bind(params);
+    stmt.bind(sanitizeParams(params));
     stmt.step();
   } finally {
     stmt.free();

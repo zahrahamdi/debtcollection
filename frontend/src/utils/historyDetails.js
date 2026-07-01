@@ -139,6 +139,32 @@ function formatAutocallAction(d) {
   return lines.length ? lines : ['—']
 }
 
+function formatAutomatedRetryFailure(d) {
+  const lines = buildLines(
+    hasValue(d?.action_type) && `نوع اقدام: ${actionTypeLabel(d.action_type)}`,
+    hasValue(d?.result) && `نتیجه: ${d.result}`,
+    hasValue(d?.attempt) &&
+      hasValue(d?.max_repeat) &&
+      `تلاش ${toFaDigits(d.attempt)} از ${toFaDigits(d.max_repeat)}`,
+    d?.exhausted === true && 'سقف تکرار پر شد'
+  )
+  return lines.length ? lines : ['—']
+}
+
+function formatStrategyAdvance(d) {
+  const lines = buildLines(
+    hasValue(d?.from_seq) &&
+      hasValue(d?.to_seq) &&
+      `از اقدام ${toFaDigits(d.from_seq)} به اقدام ${toFaDigits(d.to_seq)}`,
+    hasValue(d?.from) && `پس از: ${actionTypeLabel(d.from) || d.from}`,
+    hasValue(d?.note) && d.note,
+    hasValue(d?.attempts) &&
+      hasValue(d?.max_call_count) &&
+      `تماس‌های مذاکره: ${toFaDigits(d.attempts)} از ${toFaDigits(d.max_call_count)}`
+  )
+  return lines.length ? lines : ['عبور به اقدام بعدی استراتژی']
+}
+
 function formatCeiUpdate(d) {
   const lines = []
   if (hasValue(d.cei_previous) && hasValue(d.cei_new)) {
@@ -157,7 +183,7 @@ function formatCeiUpdate(d) {
     lines.push(`استراتژی قبلی: ${d.strategy_previous_title} ← استراتژی جدید: ${d.strategy_new_title}`)
   }
   if (hasValue(d.start_action)) {
-    lines.push(`شروع از اکشن: ${actionTypeLabel(d.start_action)}`)
+    lines.push(`شروع از اقدام: ${actionTypeLabel(d.start_action)}`)
   }
   if (hasValue(d.note)) lines.push(d.note)
   return lines.length ? lines : ['—']
@@ -170,7 +196,7 @@ function formatStrategyChange(d) {
   const lines = buildLines(
     hasValue(prev) && hasValue(next) && `استراتژی قبلی: ${prev} ← استراتژی جدید: ${next}`,
     !prev && hasValue(next) && `استراتژی جدید: ${next}`,
-    hasValue(start) && `شروع از اکشن: ${start}`,
+    hasValue(start) && `شروع از اقدام: ${start}`,
     hasValue(d.segment_new_title) && `سگمنت: ${d.segment_new_title}`,
     hasValue(d.note) && d.note
   )
@@ -287,6 +313,23 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
         return formatAutocallAction(d || {})
       }
       return formatAutocallAction(d || {})
+    }
+
+    case 'ارسال ناموفق پیامک — تلاش مجدد':
+    case 'تماس خودکار ناموفق — تلاش مجدد':
+      return formatAutomatedRetryFailure(d || {})
+
+    case 'عبور به اقدام بعدی استراتژی':
+      return formatStrategyAdvance(d || {})
+
+    case 'بازگشت به تماس مذاکره‌کننده': {
+      const lines = buildLines(
+        hasValue(d?.attempts) &&
+          hasValue(d?.max_call_count) &&
+          `تماس ${toFaDigits(d.attempts)} از ${toFaDigits(d.max_call_count)} انجام شد`,
+        hasValue(d?.note) && d.note
+      )
+      return lines.length ? lines : ['تماس بعدی در صف اجرا قرار گرفت.']
     }
 
     case 'ثبت خروجی تماس':

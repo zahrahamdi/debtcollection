@@ -16,9 +16,13 @@ const CONVERSION_ACTION_TYPES = [
 
 const STATUS_KEYS = [
   'pending_sms_result',
+  'pending_sms_retry',
   'pending_autocall_result',
+  'pending_autocall_retry',
+  'pending_strategy_continue',
   'pending_negotiator_assignment',
   'pending_negotiator_call',
+  'pending_negotiator_recall',
   'in_negotiation',
   'pending_legal_assignment',
   'burned',
@@ -384,7 +388,7 @@ router.get('/action-conversion', (req, res) => {
     res.json({ data });
   } catch (err) {
     console.error('[GET /api/reports/action-conversion]', err);
-    res.status(500).json({ error: 'خطا در دریافت نرخ تبدیل اکشن‌ها' });
+    res.status(500).json({ error: 'خطا در دریافت نرخ تبدیل اقدام‌ها' });
   }
 });
 

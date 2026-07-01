@@ -136,33 +136,45 @@ function seed() {
   }
 
   // -------------------- اکشن‌های استراتژی --------------------
-  // strategy_id, seq, action_type, body_text, allowed_from, allowed_to, wait_minutes, cost, max_repeat, avg_call_duration
+  // strategy_id, seq, action_type, body_text, allowed_from, allowed_to,
+  // wait_next_minutes, wait_repeat_minutes, cost, max_repeat, avg_call_duration
+  const defaultRepeatOnResults = (actionType) => {
+    if (actionType === 'warning_sms' || actionType === 'threatening_sms') {
+      return '["ارسال نشد"]';
+    }
+    if (actionType === 'warning_autocall' || actionType === 'threatening_autocall') {
+      return '["پاسخگو نبود","اشغال بود"]';
+    }
+    if (actionType === 'negotiator_call') return '["پاسخگو نبود"]';
+    return '[]';
+  };
   const strategyActions = [
-    // استراتژی سبک وام (id 1) — wait_minutes: ۳ روز = ۴۳۲۰ دقیقه
-    [1, 1, 'warning_sms', 'بدهکار گرامی، قسط معوق شما سررسید شده است. لطفاً نسبت به پرداخت اقدام کنید. {لینک_پرداخت}', '09:00', '18:00', 4320, 5000, null, null],
-    [1, 2, 'warning_autocall', 'تماس خودکار: یادآوری پرداخت بدهی معوق دیجی‌پی.', '10:00', '17:00', 4320, 90000, null, null],
-    [1, 3, 'negotiator_call', null, '09:00', '20:00', 2880, 0, 3, 5],
+    // استراتژی سبک وام (id 1) — wait_next_minutes: ۳ روز = ۴۳۲۰ دقیقه
+    [1, 1, 'warning_sms', 'بدهکار گرامی، قسط معوق شما سررسید شده است. لطفاً نسبت به پرداخت اقدام کنید. {لینک_پرداخت}', '09:00', '18:00', 4320, 60, 5000, 3, null],
+    [1, 2, 'warning_autocall', 'تماس خودکار: یادآوری پرداخت بدهی معوق دیجی‌پی.', '10:00', '17:00', 4320, 60, 90000, 3, null],
+    [1, 3, 'negotiator_call', null, '09:00', '20:00', 2880, 60, 0, 3, 5],
     // استراتژی متوسط وام (id 2)
-    [2, 1, 'warning_sms', '{نام_کاربر} عزیز، مبلغ {مبلغ_مطالبات} ریال بدهی معوق دارید.', '09:00', '18:00', 2880, 5000, null, null],
-    [2, 2, 'threatening_sms', 'در صورت عدم پرداخت، پرونده به حقوقی ارجاع می‌شود. {لینک_پرداخت}', '09:00', '18:00', 2880, 5000, null, null],
-    [2, 3, 'negotiator_call', null, '09:00', '20:00', 4320, 0, 5, 7],
+    [2, 1, 'warning_sms', '{نام_کاربر} عزیز، مبلغ {مبلغ_مطالبات} ریال بدهی معوق دارید.', '09:00', '18:00', 2880, 60, 5000, 3, null],
+    [2, 2, 'threatening_sms', 'در صورت عدم پرداخت، پرونده به حقوقی ارجاع می‌شود. {لینک_پرداخت}', '09:00', '18:00', 2880, 60, 5000, 3, null],
+    [2, 3, 'negotiator_call', null, '09:00', '20:00', 4320, 60, 0, 5, 7],
     // استراتژی سنگین وام (id 3)
-    [3, 1, 'threatening_sms', 'اخطار نهایی پرداخت بدهی معوق. {لینک_پرداخت}', '08:00', '20:00', 1440, 5000, null, null],
-    [3, 2, 'threatening_autocall', 'تماس خودکار تهدید: اخطار ارجاع به حقوقی.', '09:00', '18:00', 2880, 90000, null, null],
-    [3, 3, 'negotiator_call', null, '08:00', '21:00', 2880, 0, 5, 10],
+    [3, 1, 'threatening_sms', 'اخطار نهایی پرداخت بدهی معوق. {لینک_پرداخت}', '08:00', '20:00', 1440, 60, 5000, 3, null],
+    [3, 2, 'threatening_autocall', 'تماس خودکار تهدید: اخطار ارجاع به حقوقی.', '09:00', '18:00', 2880, 60, 90000, 3, null],
+    [3, 3, 'negotiator_call', null, '08:00', '21:00', 2880, 60, 0, 5, 10],
     // استراتژی سبک BNPL (id 4)
-    [4, 1, 'threatening_sms', 'یادآوری بدهی معوق BNPL. {لینک_پرداخت}', '09:00', '18:00', 2880, 5000, null, null],
-    [4, 2, 'negotiator_call', null, '09:00', '20:00', 4320, 0, 5, 5],
+    [4, 1, 'threatening_sms', 'یادآوری بدهی معوق BNPL. {لینک_پرداخت}', '09:00', '18:00', 2880, 60, 5000, 3, null],
+    [4, 2, 'negotiator_call', null, '09:00', '20:00', 4320, 60, 0, 5, 5],
     // استراتژی سنگین BNPL (id 5)
-    [5, 1, 'threatening_sms', 'اخطار پرداخت بدهی BNPL. {لینک_پرداخت}', '08:00', '20:00', 1440, 5000, null, null],
-    [5, 2, 'negotiator_call', null, '09:00', '20:00', 2880, 0, 5, 7],
+    [5, 1, 'threatening_sms', 'اخطار پرداخت بدهی BNPL. {لینک_پرداخت}', '08:00', '20:00', 1440, 60, 5000, 3, null],
+    [5, 2, 'negotiator_call', null, '09:00', '20:00', 2880, 60, 0, 5, 7],
   ];
   for (const a of strategyActions) {
     db.run(
       `INSERT INTO strategy_actions
-        (strategy_id, seq, action_type, body_text, allowed_from, allowed_to, wait_minutes, cost, max_repeat, avg_call_duration)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      a
+        (strategy_id, seq, action_type, body_text, allowed_from, allowed_to,
+         wait_next_minutes, wait_repeat_minutes, cost, max_repeat, repeat_on_results, avg_call_duration)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [...a, defaultRepeatOnResults(a[2])]
     );
   }
 
