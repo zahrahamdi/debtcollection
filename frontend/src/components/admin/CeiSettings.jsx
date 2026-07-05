@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, FlaskConical, History as HistoryIcon, CircleHelp } from 'lucide-react'
 import { fetchCeiFormulas, updateCeiFormula, testCeiFormula } from '../../api/cei'
-import { currentUser } from '../../utils/auth'
 import { toFaDigits, formatRial } from '../../utils/format'
 import Modal from '../modal/Modal'
 
@@ -140,7 +139,7 @@ export default function CeiSettings() {
   const onConfirm = async () => {
     setSaving(true)
     try {
-      await updateCeiFormula(tab, normalizeParams(params), currentUser.name)
+      await updateCeiFormula(tab, normalizeParams(params))
       toast.success('نسخه جدید فرمول CEI ذخیره شد.')
       setConfirmOpen(false)
       load()

@@ -6,7 +6,6 @@ import Modal from './Modal'
 import JalaliDatePicker from '../form/JalaliDatePicker'
 import { submitCallOutcome } from '../../api/cases'
 import { fetchSettings } from '../../api/settings'
-import { currentUser } from '../../utils/auth'
 import { toFaDigits, toEnDigits, formatRial, formatJalaliDateTime, jalaliDateTimeStyle } from '../../utils/format'
 
 const fieldClass =
@@ -242,7 +241,6 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
         refer_to_legal: form.refer_to_legal,
         send_payment_link: form.send_payment_link,
         call_date: format(new Date(), 'yyyy/MM/dd'),
-        user_name: currentUser.name,
       })
       toast.success('خروجی تماس ثبت شد.')
       onSaved?.()

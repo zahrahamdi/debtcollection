@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, Lock, CalendarX2, FileCheck2, Hourglass } from 'lucide-react'
 import { fetchSettings, updateSettings, fetchSettingsHistory } from '../../api/settings'
-import { currentUser } from '../../utils/auth'
 import { toFaDigits } from '../../utils/format'
 import Modal from '../modal/Modal'
 
@@ -81,7 +80,7 @@ export default function CaseCreationRules() {
   const onConfirm = async () => {
     setSaving(true)
     try {
-      await updateSettings([{ key: 'min_dpd', value }], currentUser.name)
+      await updateSettings([{ key: 'min_dpd', value }])
       toast.success('شرایط ایجاد پرونده ذخیره شد.')
       setConfirmOpen(false)
       load()

@@ -1,18 +1,19 @@
 import { useState } from 'react'
-import { FilePlus2, Calculator, Layers3, SlidersHorizontal, Sheet, Construction } from 'lucide-react'
+import { FilePlus2, Calculator, Layers3, SlidersHorizontal, Sheet, Construction, ShieldCheck } from 'lucide-react'
 import GeneralSettings from '../components/admin/GeneralSettings'
 import CaseCreationRules from '../components/admin/CaseCreationRules'
 import CeiSettings from '../components/admin/CeiSettings'
 import SegmentsSettings from '../components/admin/SegmentsSettings'
 import GoogleSheetSettings from '../components/admin/GoogleSheetSettings'
+import AdminUsersSettings from '../components/admin/AdminUsersSettings'
 
-// بخش‌های ادمین پنل به ترتیب PRD (بخش ۱۱)
 const SECTIONS = [
   { key: 'case_creation', label: 'شرایط ایجاد پرونده بدهی', icon: FilePlus2 },
   { key: 'cei', label: 'شاخص سختی وصول (CEI)', icon: Calculator },
   { key: 'segments', label: 'تعریف سگمنت‌ها', icon: Layers3 },
   { key: 'general', label: 'تنظیمات عمومی', icon: SlidersHorizontal },
   { key: 'google_sheet', label: 'تنظیمات Google Sheet', icon: Sheet },
+  { key: 'admin_users', label: 'مدیریت ادمین‌ها', icon: ShieldCheck },
 ]
 
 function ComingSoon({ label }) {
@@ -42,6 +43,8 @@ export default function AdminPanel() {
         return <GeneralSettings />
       case 'google_sheet':
         return <GoogleSheetSettings />
+      case 'admin_users':
+        return <AdminUsersSettings />
       default:
         return <ComingSoon label={SECTIONS.find((s) => s.key === active)?.label} />
     }

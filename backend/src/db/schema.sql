@@ -8,10 +8,57 @@
 PRAGMA foreign_keys = ON;
 
 -- ---------------------------------------------------------------------
+-- احراز هویت و سطوح دسترسی (RBAC)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  first_name    TEXT    NOT NULL,
+  last_name     TEXT    NOT NULL,
+  username      TEXT    NOT NULL UNIQUE,
+  email         TEXT    NOT NULL UNIQUE,
+  password_hash TEXT    NOT NULL,
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  is_super_admin INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE,
+  description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+  user_id     INTEGER NOT NULL,
+  role_id     INTEGER NOT NULL,
+  assigned_at TEXT    NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, role_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (role_id) REFERENCES roles(id)
+);
+
+CREATE TABLE IF NOT EXISTS permissions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  resource    TEXT    NOT NULL,
+  action      TEXT    NOT NULL,
+  description TEXT,
+  UNIQUE(resource, action)
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+  role_id       INTEGER NOT NULL,
+  permission_id INTEGER NOT NULL,
+  PRIMARY KEY (role_id, permission_id),
+  FOREIGN KEY (role_id) REFERENCES roles(id),
+  FOREIGN KEY (permission_id) REFERENCES permissions(id)
+);
+
+-- ---------------------------------------------------------------------
 -- مذاکره‌کنندگان (Negotiators)
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS negotiators (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id          INTEGER REFERENCES users(id),
   name             TEXT    NOT NULL,
   status           TEXT    NOT NULL DEFAULT 'active',      -- active | inactive
   cooperation_type TEXT    NOT NULL DEFAULT 'internal',    -- internal | outsourced

@@ -10,9 +10,71 @@
  * اجرا:  npm run seed
  */
 
+const bcrypt = require('bcryptjs');
 const { initDatabase, getDb, persist } = require('./database');
 const { DEFAULT_LOAN_PARAMS, DEFAULT_BNPL_PARAMS } = require('./cei');
 const { formatDatetime, calcActionStatus, gregorianToJalali, formatJalali } = require('./dateUtil');
+
+const PERMISSIONS = [
+  ['cases', 'view'], ['cases', 'assign'], ['cases', 'reassign'], ['cases', 'export'],
+  ['debtors', 'view'], ['debtors', 'add_phone'],
+  ['strategies', 'view'], ['strategies', 'create'], ['strategies', 'edit'], ['strategies', 'delete'],
+  ['negotiators', 'view'], ['negotiators', 'create'], ['negotiators', 'edit'],
+  ['bulk_operations', 'view'], ['bulk_operations', 'upload'],
+  ['admin_panel', 'view'], ['admin_panel', 'edit'],
+  ['reports', 'view'],
+  ['installments', 'view'],
+  ['history', 'view'],
+  ['call_outcome', 'create'],
+  ['google_sheet_sync', 'execute'],
+];
+
+const NEGOTIATOR_PERMISSIONS = [
+  ['cases', 'view'], ['cases', 'assign'],
+  ['debtors', 'view'], ['debtors', 'add_phone'],
+  ['installments', 'view'],
+  ['history', 'view'],
+  ['call_outcome', 'create'],
+];
+
+function seedAuth(db) {
+  db.run(`INSERT INTO roles (name, description) VALUES ('admin', 'مدیر وصول مطالبات')`);
+  db.run(`INSERT INTO roles (name, description) VALUES ('negotiator', 'مذاکره‌کننده')`);
+
+  for (const [resource, action] of PERMISSIONS) {
+    db.run('INSERT INTO permissions (resource, action) VALUES (?, ?)', [resource, action]);
+  }
+
+  const adminRoleId = 1;
+  const negotiatorRoleId = 2;
+  const permRows = db.exec('SELECT id, resource, action FROM permissions')[0];
+  if (permRows) {
+    for (const row of permRows.values) {
+      db.run('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [
+        adminRoleId,
+        row[0],
+      ]);
+    }
+    for (const [resource, action] of NEGOTIATOR_PERMISSIONS) {
+      const pid = permRows.values.find((r) => r[1] === resource && r[2] === action)?.[0];
+      if (pid) {
+        db.run('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [
+          negotiatorRoleId,
+          pid,
+        ]);
+      }
+    }
+  }
+
+  const passwordHash = bcrypt.hashSync('Admin@1234', 10);
+  db.run(
+    `INSERT INTO users (first_name, last_name, username, email, password_hash, is_super_admin)
+     VALUES (?, ?, ?, ?, ?, 1)`,
+    ['زهرا', 'حمیدی', 'zahra.hamdi', 'zahra@digipay.ir', passwordHash]
+  );
+  db.run('INSERT INTO user_roles (user_id, role_id) VALUES (1, 1)');
+  return 1;
+}
 
 /** تاریخ/ساعت n روز قبل — برای next_action_date معوق */
 function daysAgoDatetime(days, hour = 9) {
@@ -60,9 +122,16 @@ function seed() {
     DELETE FROM phone_numbers;
     DELETE FROM debtors;
     DELETE FROM negotiators;
+    DELETE FROM role_permissions;
+    DELETE FROM user_roles;
+    DELETE FROM permissions;
+    DELETE FROM roles;
+    DELETE FROM users;
     DELETE FROM settings;
     DELETE FROM sqlite_sequence;
   `);
+
+  const adminUserId = seedAuth(db);
 
   // -------------------- تنظیمات عمومی --------------------
   const settings = [
@@ -90,15 +159,15 @@ function seed() {
 
   // -------------------- مذاکره‌کنندگان --------------------
   const negotiators = [
-    // name, status, cooperation_type, capacity, hourly_wage(ریال)
-    ['زهرا حمیدی', 'active', 'internal', 50, 1500000],
-    ['علی رضایی', 'active', 'internal', 40, 1300000],
-    ['سارا محمدی', 'active', 'outsourced', 30, 1100000],
+    // user_id, name, status, cooperation_type, capacity, hourly_wage(ریال)
+    [adminUserId, 'زهرا حمیدی', 'active', 'internal', 50, 1500000],
+    [null, 'علی رضایی', 'active', 'internal', 40, 1300000],
+    [null, 'سارا محمدی', 'active', 'outsourced', 30, 1100000],
   ];
   for (const n of negotiators) {
     db.run(
-      `INSERT INTO negotiators (name, status, cooperation_type, capacity, hourly_wage)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO negotiators (user_id, name, status, cooperation_type, capacity, hourly_wage)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       n
     );
   }

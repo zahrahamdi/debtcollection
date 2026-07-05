@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Plus, Pencil } from 'lucide-react'
 import { fetchNegotiators, createNegotiator, updateNegotiator } from '../api/negotiators'
+import { fetchUsers } from '../api/users'
 import { isAdmin } from '../utils/auth'
 import { toFaDigits, formatRial } from '../utils/format'
 import { cooperationTypeLabel, negotiatorStatusLabel } from '../utils/constants'
@@ -27,12 +28,13 @@ const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400'
 const labelClass = 'mb-1 block text-xs font-medium text-slate-500'
 
-const emptyForm = { name: '', cooperation_type: 'internal', capacity: '', hourly_wage: '', status: 'active' }
+const emptyForm = { user_id: '', cooperation_type: 'internal', capacity: '', hourly_wage: '', status: 'active' }
 
 export default function Negotiators() {
   const navigate = useNavigate()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  const [eligibleUsers, setEligibleUsers] = useState([])
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -52,20 +54,26 @@ export default function Negotiators() {
   }
   useEffect(load, [])
 
-  // کلیک روی مذاکره‌کننده → صفحه‌ی پرونده‌ها فیلترشده به او (AC1)
+  const loadEligibleUsers = () => {
+    fetchUsers({ without_role: 'negotiator' })
+      .then(setEligibleUsers)
+      .catch(() => toast.error('خطا در دریافت کاربران'))
+  }
+
   const goToCases = (n) => navigate(`/cases?negotiator=${encodeURIComponent(n.name)}`)
 
   const openCreate = () => {
     setEditing(null)
     setForm(emptyForm)
     setFormError('')
+    loadEligibleUsers()
     setModalOpen(true)
   }
 
   const openEdit = (n) => {
     setEditing(n)
     setForm({
-      name: n.name,
+      user_id: String(n.user_id || ''),
       cooperation_type: n.cooperation_type,
       capacity: String(n.capacity ?? ''),
       hourly_wage: String(n.hourly_wage ?? ''),
@@ -75,8 +83,10 @@ export default function Negotiators() {
     setModalOpen(true)
   }
 
+  const selectedUser = eligibleUsers.find((u) => String(u.id) === String(form.user_id))
+
   const save = async () => {
-    if (!editing && !form.name.trim()) return setFormError('نام مذاکره‌کننده اجباری است.')
+    if (!editing && !form.user_id) return setFormError('انتخاب کاربر اجباری است.')
     if (form.capacity === '' || Number(form.capacity) < 0 || !Number.isInteger(Number(form.capacity)))
       return setFormError('ظرفیت کاری باید عدد صحیح نامنفی باشد.')
     if (!Number.isInteger(Number(form.hourly_wage)) || Number(form.hourly_wage) <= 0)
@@ -94,7 +104,7 @@ export default function Negotiators() {
         })
       } else {
         await createNegotiator({
-          name: form.name.trim(),
+          user_id: Number(form.user_id),
           cooperation_type: form.cooperation_type,
           capacity: Number(form.capacity),
           hourly_wage: Number(form.hourly_wage),
@@ -194,7 +204,6 @@ export default function Negotiators() {
         </table>
       </div>
 
-      {/* مدال ایجاد/ویرایش */}
       <Modal
         open={modalOpen}
         onClose={() => !saving && setModalOpen(false)}
@@ -221,16 +230,44 @@ export default function Negotiators() {
         }
       >
         <div className="space-y-4">
-          <div>
-            <label className={labelClass}>نام مذاکره‌کننده</label>
-            <input
-              className={inputClass}
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="مثال: زهرا حمیدی"
-              disabled={Boolean(editing)}
-            />
-          </div>
+          {editing ? (
+            <div>
+              <label className={labelClass}>نام مذاکره‌کننده</label>
+              <input className={inputClass} value={editing.name} disabled />
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className={labelClass}>کاربر</label>
+                <select
+                  className={inputClass}
+                  value={form.user_id}
+                  onChange={(e) => setForm((f) => ({ ...f, user_id: e.target.value }))}
+                >
+                  <option value="">انتخاب کاربر…</option>
+                  {eligibleUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.first_name} {u.last_name} ({u.username})
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-[11px] leading-5 text-slate-400">
+                  کاربر باید ابتدا در سیستم ثبت‌نام کرده باشد و هنوز نقش مذاکره‌کننده نداشته باشد.
+                  بعد از تخصیص، نقش مذاکره‌کننده به او داده می‌شود.
+                </p>
+              </div>
+              {selectedUser && (
+                <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  <div>
+                    {selectedUser.first_name} {selectedUser.last_name}
+                  </div>
+                  <div dir="ltr" className="text-xs text-slate-400">
+                    {selectedUser.email}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
           <div>
             <label className={labelClass}>نوع همکاری</label>
             <select

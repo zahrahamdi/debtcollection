@@ -51,10 +51,9 @@ export async function fetchCaseById(id) {
 }
 
 // تخصیص / تخصیص مجدد پرونده به مذاکره‌کننده
-export async function assignCase(id, negotiatorId, userName) {
+export async function assignCase(id, negotiatorId) {
   const { data } = await client.post(`/cases/${id}/assign`, {
     negotiator_id: negotiatorId,
-    user_name: userName,
   })
   return data?.data
 }

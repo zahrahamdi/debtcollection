@@ -7,8 +7,8 @@ export async function fetchSettings() {
 }
 
 // به‌روزرسانی یک یا چند تنظیم
-export async function updateSettings(changes, userName) {
-  const { data } = await client.put('/settings', { changes, user_name: userName })
+export async function updateSettings(changes) {
+  const { data } = await client.put('/settings', { changes })
   return data?.data ?? {}
 }
 

@@ -3,6 +3,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { requireAdmin } = require('../middleware/auth.middleware');
+const { assignRoleToUser } = require('../services/auth.service');
 
 const COOPERATION_TYPES = ['internal', 'outsourced'];
 const STATUSES = ['active', 'inactive'];
@@ -10,13 +12,11 @@ const STATUSES = ['active', 'inactive'];
 const isPositiveInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
 const isNonNegInt = (v) => Number.isInteger(Number(v)) && Number(v) >= 0;
 
-// شمارش با یک شرط مشخص روی پرونده‌های تخصیص‌یافته به مذاکره‌کننده
 function countCases(negId, extraWhere = '') {
   const sql = `SELECT COUNT(*) AS c FROM cases WHERE assigned_negotiator_id = $id ${extraWhere}`;
   return query(sql, { $id: negId })[0]?.c ?? 0;
 }
 
-// فیلدهای محاسباتی گرید (Story 2.1)
 function withStats(n) {
   const total = countCases(n.id);
   const paid = countCases(n.id, `AND case_status = 'paid'`);
@@ -29,29 +29,45 @@ function withStats(n) {
   };
 }
 
-/**
- * GET /api/negotiators
- * لیست مذاکره‌کنندگان با فیلدهای محاسباتی.
- */
+function mapNegotiatorRow(n) {
+  const displayName =
+    n.user_first_name || n.user_last_name
+      ? `${n.user_first_name || ''} ${n.user_last_name || ''}`.trim()
+      : n.name;
+  return withStats({
+    id: n.id,
+    user_id: n.user_id,
+    name: displayName,
+    status: n.status,
+    cooperation_type: n.cooperation_type,
+    capacity: n.capacity,
+    hourly_wage: n.hourly_wage,
+    created_at: n.created_at,
+    email: n.email ?? null,
+  });
+}
+
+const NEGOTIATOR_SELECT = `
+  SELECT n.*, u.first_name AS user_first_name, u.last_name AS user_last_name, u.email
+  FROM negotiators n
+  LEFT JOIN users u ON u.id = n.user_id
+`;
+
 router.get('/', (req, res) => {
   try {
-    const rows = query('SELECT * FROM negotiators ORDER BY id ASC');
-    res.json({ data: rows.map(withStats) });
+    const rows = query(`${NEGOTIATOR_SELECT} ORDER BY n.id ASC`);
+    res.json({ data: rows.map(mapNegotiatorRow) });
   } catch (err) {
     console.error('[GET /api/negotiators]', err);
     res.status(500).json({ error: 'خطا در دریافت مذاکره‌کنندگان' });
   }
 });
 
-/**
- * POST /api/negotiators
- * ایجاد مذاکره‌کننده جدید (Story 2.2). وضعیت پیش‌فرض: فعال.
- */
-router.post('/', (req, res) => {
+router.post('/', requireAdmin, (req, res) => {
   try {
-    const { name, capacity, cooperation_type, hourly_wage } = req.body || {};
-    const cleanName = (name || '').trim();
-    if (!cleanName) return res.status(400).json({ error: 'نام مذاکره‌کننده اجباری است' });
+    const { user_id, capacity, cooperation_type, hourly_wage } = req.body || {};
+    const uid = Number(user_id);
+    if (!uid) return res.status(400).json({ error: 'انتخاب کاربر اجباری است' });
     if (!COOPERATION_TYPES.includes(cooperation_type)) {
       return res.status(400).json({ error: 'نوع همکاری نامعتبر است' });
     }
@@ -62,24 +78,38 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'حقوق ساعتی باید عدد صحیح مثبت باشد' });
     }
 
+    const userRows = query('SELECT * FROM users WHERE id = $id', { $id: uid });
+    if (!userRows.length) return res.status(404).json({ error: 'کاربر یافت نشد' });
+
+    const existingNeg = query('SELECT id FROM negotiators WHERE user_id = $uid', { $uid: uid });
+    if (existingNeg.length) {
+      return res.status(409).json({ error: 'این کاربر قبلاً به عنوان مذاکره‌کننده ثبت شده است' });
+    }
+
+    const fullName = `${userRows[0].first_name} ${userRows[0].last_name}`.trim();
     const { lastInsertRowid } = run(
-      `INSERT INTO negotiators (name, status, cooperation_type, capacity, hourly_wage)
-       VALUES ($name, 'active', $ct, $cap, $wage)`,
-      { $name: cleanName, $ct: cooperation_type, $cap: Number(capacity), $wage: Number(hourly_wage) }
+      `INSERT INTO negotiators (user_id, name, status, cooperation_type, capacity, hourly_wage)
+       VALUES ($uid, $name, 'active', $ct, $cap, $wage)`,
+      {
+        $uid: uid,
+        $name: fullName,
+        $ct: cooperation_type,
+        $cap: Number(capacity),
+        $wage: Number(hourly_wage),
+      }
     );
-    const rows = query('SELECT * FROM negotiators WHERE id = $id', { $id: lastInsertRowid });
-    res.status(201).json({ data: withStats(rows[0]) });
+
+    assignRoleToUser(uid, 'negotiator');
+
+    const rows = query(`${NEGOTIATOR_SELECT} WHERE n.id = $id`, { $id: lastInsertRowid });
+    res.status(201).json({ data: mapNegotiatorRow(rows[0]) });
   } catch (err) {
     console.error('[POST /api/negotiators]', err);
     res.status(500).json({ error: 'خطا در ایجاد مذاکره‌کننده' });
   }
 });
 
-/**
- * PUT /api/negotiators/:id
- * ویرایش (Story 2.3): ظرفیت، وضعیت، نوع همکاری، حقوق ساعتی. (نام تغییر نمی‌کند.)
- */
-router.put('/:id', (req, res) => {
+router.put('/:id', requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM negotiators WHERE id = $id', { $id: id });
@@ -107,8 +137,8 @@ router.put('/:id', (req, res) => {
        WHERE id = $id`,
       { $cap: Number(capacity), $st: status, $ct: cooperation_type, $wage: Number(hourly_wage), $id: id }
     );
-    const rows = query('SELECT * FROM negotiators WHERE id = $id', { $id: id });
-    res.json({ data: withStats(rows[0]) });
+    const rows = query(`${NEGOTIATOR_SELECT} WHERE n.id = $id`, { $id: id });
+    res.json({ data: mapNegotiatorRow(rows[0]) });
   } catch (err) {
     console.error('[PUT /api/negotiators/:id]', err);
     res.status(500).json({ error: 'خطا در ویرایش مذاکره‌کننده' });

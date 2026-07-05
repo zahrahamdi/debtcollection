@@ -8,13 +8,13 @@
 | Frontend | React 19 · Vite · Tailwind CSS · **Recharts** · **React Flow** |
 | پیامک | Kavenegar (یا حالت Mock) |
 | زمان‌بند | node-cron — موتور استراتژی هر ۱ دقیقه |
-| احراز هویت (دمو) | Mock در فرانت — **بدون لاگین/ثبت‌نام** |
+| احراز هویت | JWT (jsonwebtoken) · bcryptjs · RBAC (users/roles/permissions) |
 
 ## مستندات
 
 | فایل | محتوا |
 |------|--------|
-| [TECHNICAL.md](./TECHNICAL.md) | **مستند فنی:** معماری، منطق کد، فایل‌ها، APIها، موتور استراتژی |
+| [TECHNICAL.md](./TECHNICAL.md) | **مستند فنی:** معماری، auth، APIها، موتور استراتژی، بدهی فنی |
 | [PRD-DigiPay.md](./PRD-DigiPay.md) | نیازمندی‌های محصول (شامل **بخش ۱۰** — تکمیل‌های نسخه دمو) |
 | [PROJECT-STATUS.md](./PROJECT-STATUS.md) | وضعیت پیاده‌سازی (ممکن است قدیمی‌تر از کد باشد) |
 
@@ -35,7 +35,7 @@
 cd backend
 npm install
 cp .env.example .env
-npm run seed    # اختیاری — فقط برای دیتابیس خالی
+npm run seed    # داده دمو + کاربر admin (پس از دیتابیس خالی)
 npm run dev     # http://localhost:3000
 ```
 
@@ -55,9 +55,10 @@ npm run dev     # http://localhost:5173
 
 ```env
 PORT=3000
-KAVENEGAR_API_KEY=          # برای ارسال واقعی پیامک
-KAVENEGAR_SENDER=           # خط فرستنده کاوه‌نگار
-SMS_MOCK=true               # true = بدون API واقعی، فقط لاگ در ترمینال
+JWT_SECRET=digipay-jwt-secret-2024   # اجباری در production
+KAVENEGAR_API_KEY=                   # برای ارسال واقعی پیامک
+KAVENEGAR_SENDER=                    # خط فرستنده کاوه‌نگار
+SMS_MOCK=true                        # true = بدون API واقعی
 ```
 
 ---
@@ -84,19 +85,22 @@ debt-collection-mng-project/
 │   │   ├── server.js              # ورود: init DB + listen + scheduler
 │   │   ├── app.js                 # Express middleware + routes
 │   │   ├── db/                    # schema, database, seed, CEI, dateUtil
-│   │   ├── routes/                # REST API
-│   │   └── services/              # strategy engine, import, SMS, payment
+│   │   ├── middleware/            # authenticate, authorize, requireAdmin
+│   │   ├── routes/                # REST API (+ auth.routes, users.routes)
+│   │   ├── services/              # strategy engine, import, auth, SMS
+│   │   └── utils/                 # requestUser (getActorName)
 │   ├── scripts/                   # ابزارهای نگهداری و دیباگ
 │   ├── database.sqlite            # دیتابیس محلی (در git نیست)
 │   └── .env.example
 ├── frontend/
 │   └── src/
-│       ├── pages/                 # Cases, Reports, AdminPanel, …
+│       ├── pages/                 # Cases, Reports, Login, Register, …
 │       ├── components/
-│       │   ├── charts/            # Recharts: pie/bar مشترک
-│       │   └── reports/           # FunnelFlowChart (React Flow)
-│       ├── api/                   # axios wrappers
-│       └── utils/auth.js          # mock نقش admin | negotiator
+│       │   ├── charts/            # Recharts
+│       │   ├── reports/           # FunnelFlowChart (React Flow)
+│       │   └── ProtectedRoute.jsx # guard مسیرها
+│       ├── api/                   # axios + auth interceptor
+│       └── utils/auth.js          # JWT, roles, permissions
 ├── PRD-DigiPay.md
 ├── PROJECT-STATUS.md
 ├── TECHNICAL.md
@@ -113,6 +117,7 @@ debt-collection-mng-project/
 - **عملیات گروهی:** آپلود Excel پرونده، پرداخت، تخصیص / تخصیص مجدد
 - **CEI و سگمنت:** فرمول نسخه‌دار، تخصیص استراتژی، A/B Test
 - **گزارشات (`/reports`):** سه تب — **پرونده‌ها** (کارت KPI، نمودار وضعیت، روند ایجاد/پرداخت کامل)، **استراتژی‌ها** (عملکرد، هزینه/وصول، Funnel با React Flow)، **مذاکره‌کنندگان** (جدول + pie دلایل عدم پرداخت)
+- **احراز هویت:** ثبت‌نام، ورود، JWT، نقش admin/negotiator، پنل مدیریت ادمین‌ها، صفحه انتظار نقش
 - **تاریخچه:** Audit Trail با فیلتر ۵ نوع اقدام
 - **بدهکاران / اقساط:** لیست بدهکار، شماره تماس، اقساط پرونده
 
@@ -123,6 +128,10 @@ debt-collection-mng-project/
 | مسیر | کاربرد |
 |------|--------|
 | `GET /api/health` | سلامت سرور |
+| `POST /api/auth/login` | ورود — JWT |
+| `POST /api/auth/register` | ثبت‌نام |
+| `GET /api/auth/me` | کاربر جاری |
+| `GET /api/users` | لیست کاربران (admin) |
 | `GET /api/cases` | لیست پرونده‌ها |
 | `GET /api/cases/:id` | جزئیات پرونده |
 | `POST /api/bulk/upload-cases` | آپلود Excel پرونده |
@@ -186,26 +195,27 @@ debt-collection-mng-project/
 
 ---
 
-## احراز هویت و دسترسی (دمو)
+## احراز هویت و دسترسی
 
-**لاگین، ثبت‌نام، JWT، session و جدول `users` در نسخه فعلی وجود ندارد.**
+**Login، Register، JWT و جداول `users` / `roles` / `permissions` پیاده شده‌اند.**
 
 | لایه | وضعیت |
 |------|--------|
-| Frontend | `frontend/src/utils/auth.js` — کاربر mock: `{ name, role: 'admin' \| 'negotiator' }` |
-| Backend | بدون middleware امنیتی؛ همه APIها بدون token |
-| Audit | فیلد `user_name` (متن آزاد) در history/settings/bulk — از body فرانت |
+| Frontend | `/login`, `/register`, `/forgot-password`, `/waiting` · `ProtectedRoute` · interceptor توکن |
+| Backend | `authenticate` روی `/api/*` (به‌جز auth/health) · `requireAdmin` روی admin routes |
+| Audit | `user_name` از `req.user` — دیگر از body فرانت نیست |
 
-**دو نقش محصولی:** `admin` · `negotiator` — جدول کامل در [PRD §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
+**ورود admin (بعد از `npm run seed`):** `zahra.hamdi` / `Admin@1234` (سوپر ادمین)
 
-**کنترل UI (فقط فرانت):**
-- منوی sidebar: `adminOnly` در `navItems.js`
-- Guard صفحه: `Reports`، `BulkOperations` → ریدایرکت به `/cases` اگر نه admin
-- عملیات: تخصیص، سینک Sheet، ثبت تماس (مذاکره‌کننده فقط پرونده خودش)
+**بدهی فنی:** RBAC granular (`authorize`) هنوز روی همه routeها enforce نشده · `hasPermission()` در UI کم‌استفاده است.
 
-**کاربر پیش‌فرض:** زهرا حمیدی (ادمین). برای تست نقش مذاکره‌کننده: `role: 'negotiator'` و `negotiatorId` در `auth.js`.
+جزئیات: [TECHNICAL.md §۱۰](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی) · [PRD §۳.۴](./PRD-DigiPay.md#۳۴-پیاده‌سازی-دسترسی-در-نسخه-دمو)
 
-جزئیات معماری: [TECHNICAL.md — احراز هویت](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی-دمو).
+---
+
+## تست و کیفیت (برنامه)
+
+Unit / Integration / E2E **هنوز پیاده نشده** — مرجع: [TECHNICAL.md §۱۱](./TECHNICAL.md#۱۱-تست-refactor-و-بدهی-فنی).
 
 ---
 
@@ -229,4 +239,5 @@ debt-collection-mng-project/
 | `404` روی bulk | backend را ری‌استارت کنید |
 | `[sms] خطا: 403` | API Key و خط فرستنده کاوه‌نگار |
 | پرونده گیر کرده / پیامک تکراری | `node scripts/inspect-case.js <credit_id>` — جزئیات در TECHNICAL.md |
-| `Wrong API use … undefined` | نسخه جدید backend (sanitize پارامترهای sql.js) |
+| `401` بعد از login | backend را ری‌استارت کنید؛ `JWT_SECRET` در `.env` |
+| seed خطا می‌دهد | `npm install` در backend؛ سپس `npm run seed` |

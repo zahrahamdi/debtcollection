@@ -1,9 +1,8 @@
 import client from './client'
 
-export async function uploadCases(file, userName) {
+export async function uploadCases(file) {
   const formData = new FormData()
   formData.append('file', file)
-  if (userName) formData.append('user_name', userName)
 
   const { data } = await client.post('/bulk/upload-cases', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -12,10 +11,9 @@ export async function uploadCases(file, userName) {
   return data
 }
 
-export async function uploadPayments(file, userName) {
+export async function uploadPayments(file) {
   const formData = new FormData()
   formData.append('file', file)
-  if (userName) formData.append('user_name', userName)
 
   const { data } = await client.post('/bulk/upload-payments', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -24,10 +22,9 @@ export async function uploadPayments(file, userName) {
   return data
 }
 
-export async function assignCases(file, userName) {
+export async function assignCases(file) {
   const formData = new FormData()
   formData.append('file', file)
-  if (userName) formData.append('user_name', userName)
 
   const { data } = await client.post('/bulk/assign-cases', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -36,10 +33,9 @@ export async function assignCases(file, userName) {
   return data
 }
 
-export async function reassignCases(file, userName) {
+export async function reassignCases(file) {
   const formData = new FormData()
   formData.append('file', file)
-  if (userName) formData.append('user_name', userName)
 
   const { data } = await client.post('/bulk/reassign-cases', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -48,9 +44,8 @@ export async function reassignCases(file, userName) {
   return data
 }
 
-export async function fetchBulkHistory(userName) {
-  const params = userName ? { user_name: userName } : {}
-  const { data } = await client.get('/bulk/history', { params })
+export async function fetchBulkHistory() {
+  const { data } = await client.get('/bulk/history')
   return data.data
 }
 

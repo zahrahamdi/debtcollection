@@ -7,11 +7,10 @@ export async function fetchCeiFormulas() {
 }
 
 // ذخیره فرمول → ساخت نسخه جدید
-export async function updateCeiFormula(creditType, params, userName, changeNote) {
+export async function updateCeiFormula(creditType, params, changeNote) {
   const { data } = await client.put('/cei-formulas', {
     credit_type: creditType,
     params,
-    user_name: userName,
     change_note: changeNote,
   })
   return data?.data ?? null

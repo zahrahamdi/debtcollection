@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, Clock, CalendarClock, HandCoins } from 'lucide-react'
 import { fetchSettings, updateSettings, fetchSettingsHistory } from '../../api/settings'
-import { currentUser } from '../../utils/auth'
 import { toFaDigits } from '../../utils/format'
 import Modal from '../modal/Modal'
 
@@ -136,7 +135,7 @@ export default function GeneralSettings() {
   const onConfirm = async () => {
     setSaving(true)
     try {
-      await updateSettings(dirtyChanges, currentUser.name)
+      await updateSettings(dirtyChanges)
       toast.success('تنظیمات با موفقیت ذخیره شد.')
       setConfirmOpen(false)
       load()

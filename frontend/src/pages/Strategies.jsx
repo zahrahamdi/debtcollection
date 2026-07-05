@@ -11,7 +11,7 @@ import {
 import { fetchSegments } from '../api/segments'
 import StrategyActionsBuilder, { normalizeStrategyAction } from '../components/admin/StrategyActionsBuilder'
 import AbTestModal from '../components/admin/AbTestModal'
-import { currentUser, isAdmin } from '../utils/auth'
+import { getCurrentUser, getUserDisplayName, isAdmin } from '../utils/auth'
 import { toFaDigits, orDash } from '../utils/format'
 import { creditTypeLabel } from '../utils/constants'
 import Modal from '../components/modal/Modal'
@@ -113,7 +113,7 @@ export default function Strategies() {
       title: form.title.trim(),
       credit_type: form.credit_type,
       segment_id: Number(form.segment_id),
-      created_by: currentUser.name,
+      created_by: getUserDisplayName(getCurrentUser()),
       actions: form.actions,
     }
     try {

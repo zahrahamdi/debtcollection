@@ -162,6 +162,24 @@ function migrateSchema(database) {
 
     repairPromisedDatetimeFromHistory(database);
   }
+
+  const negInfo = database.exec('PRAGMA table_info(negotiators)');
+  if (negInfo.length) {
+    const negCols = negInfo[0].values.map((row) => row[1]);
+    if (!negCols.includes('user_id')) {
+      database.run('ALTER TABLE negotiators ADD COLUMN user_id INTEGER REFERENCES users(id)');
+      console.log('[db] migration: negotiators.user_id added');
+    }
+  }
+
+  const usersInfo = database.exec('PRAGMA table_info(users)');
+  if (usersInfo.length) {
+    const userCols = usersInfo[0].values.map((row) => row[1]);
+    if (!userCols.includes('is_super_admin')) {
+      database.run('ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0');
+      console.log('[db] migration: users.is_super_admin added');
+    }
+  }
 }
 
 /** تعهدات pending با 23:59 پیش‌فرض migration — بازیابی از تاریخچه ثبت تماس */

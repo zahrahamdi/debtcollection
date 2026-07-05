@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { getActorName } = require('../utils/requestUser');
 
 // کلیدهایی که باید عدد صحیح مثبت باشند (اعتبارسنجی سمت سرور)
 const POSITIVE_INT_KEYS = new Set([
@@ -58,7 +59,8 @@ router.get('/history', (req, res) => {
  */
 router.put('/', (req, res) => {
   try {
-    const { changes, user_name } = req.body || {};
+    const { changes } = req.body || {};
+    const userName = getActorName(req);
     if (!Array.isArray(changes) || changes.length === 0) {
       return res.status(400).json({ error: 'هیچ تغییری ارسال نشده است' });
     }
@@ -98,7 +100,7 @@ router.put('/', (req, res) => {
       run(
         `INSERT INTO settings_history (key, old_value, new_value, user_name)
          VALUES ($key, $old, $new, $user)`,
-        { $key: c.key, $old: oldValue, $new: newValue, $user: user_name || 'ادمین' }
+        { $key: c.key, $old: oldValue, $new: newValue, $user: userName }
       );
     }
 

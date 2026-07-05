@@ -21,6 +21,7 @@ const {
 const { sendSms, replacePlaceholders, NO_ANSWER_SMS_TEXT, PAYMENT_LINK_SMS_TEMPLATE } = require('../services/sms.service');
 const { parseRepeatOnResults } = require('../db/strategyActions');
 const { buildLastActionMap, resolveLastAction, ASSIGN_OPERATION } = require('../db/lastAction');
+const { getActorName } = require('../utils/requestUser');
 
 const PAGE_SIZE = 100;
 
@@ -368,7 +369,8 @@ router.get('/:id/history', (req, res) => {
 router.post('/:id/assign', (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { negotiator_id, user_name } = req.body || {};
+    const { negotiator_id } = req.body || {};
+    const userName = getActorName(req);
 
     const caseRows = query('SELECT * FROM cases WHERE id = $id', { $id: id });
     if (caseRows.length === 0) return res.status(404).json({ error: 'پرونده یافت نشد' });
@@ -454,7 +456,7 @@ router.post('/:id/assign', (req, res) => {
       {
         $cid: id,
         $did: c.debtor_id,
-        $user: user_name || 'ادمین',
+        $user: userName,
         $op: op,
         $status: updated.case_status,
         $na: updated.next_action,
@@ -510,7 +512,7 @@ router.post('/:id/call-outcome', async (req, res) => {
     }
 
     const willPay = b.payment_decision === 'دارد';
-    const userName = b.user_name || 'مذاکره‌کننده';
+    const userName = getActorName(req);
     const debtorName = `${c.first_name || ''} ${c.last_name || ''}`.trim();
 
     const stage = computeNegotiatorStage(c.strategy_id) || {};

@@ -3,7 +3,6 @@ import toast from 'react-hot-toast'
 import { Save, Sheet, Link2, PlugZap } from 'lucide-react'
 import { fetchSettings, updateSettings } from '../../api/settings'
 import { testGsheetConnection } from '../../api/gsheet'
-import { currentUser } from '../../utils/auth'
 import Modal from '../modal/Modal'
 
 const inputClass =
@@ -74,7 +73,7 @@ export default function GoogleSheetSettings() {
     setSaving(true)
     try {
       const changes = Object.keys(form).map((key) => ({ key, value: form[key] }))
-      await updateSettings(changes, currentUser.name)
+      await updateSettings(changes)
       toast.success('تنظیمات Google Sheet ذخیره شد.')
       setConfirmOpen(false)
       load()

@@ -13,6 +13,8 @@ const {
   MAX_ROWS: BULK_ASSIGN_MAX_ROWS,
 } = require('../services/bulk-assign.service');
 
+const { getActorName } = require('../utils/requestUser');
+
 const router = express.Router();
 
 const upload = multer({
@@ -59,7 +61,7 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
     }
 
-    const userName = req.body?.user_name || 'ادمین';
+    const userName = getActorName(req);
     const rows = parseExcelBuffer(req.file.buffer);
 
     if (rows.length === 0) {
@@ -133,7 +135,7 @@ router.post('/upload-payments', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
     }
 
-    const userName = req.body?.user_name || 'ادمین';
+    const userName = getActorName(req);
     const rows = parseExcelBuffer(req.file.buffer);
 
     if (rows.length === 0) {
@@ -235,7 +237,7 @@ router.post('/assign-cases', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
     }
 
-    const userName = req.body?.user_name || 'ادمین';
+    const userName = getActorName(req);
     const rows = parseExcelBuffer(req.file.buffer);
 
     if (rows.length === 0) {
@@ -280,7 +282,7 @@ router.post('/reassign-cases', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'فایل Excel ارسال نشده است' });
     }
 
-    const userName = req.body?.user_name || 'ادمین';
+    const userName = getActorName(req);
     const rows = parseExcelBuffer(req.file.buffer);
 
     if (rows.length === 0) {

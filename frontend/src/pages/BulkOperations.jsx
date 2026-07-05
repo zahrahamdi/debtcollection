@@ -11,7 +11,7 @@ import {
   fetchBulkHistory,
   errorReportUrl,
 } from '../api/bulk'
-import { currentUser, isAdmin } from '../utils/auth'
+import { isAdmin } from '../utils/auth'
 import { formatSqliteDateTime, jalaliDateTimeStyle, toFaDigits } from '../utils/format'
 
 const STATUS_TONE = {
@@ -190,7 +190,7 @@ export default function BulkOperations() {
 
   const loadHistory = () => {
     setLoadingHistory(true)
-    fetchBulkHistory(currentUser.name)
+    fetchBulkHistory()
       .then(setHistory)
       .catch(() => toast.error('خطا در دریافت تاریخچه'))
       .finally(() => setLoadingHistory(false))
@@ -261,7 +261,7 @@ export default function BulkOperations() {
 
     setUploading(true)
     try {
-      await uploadFn(selectedFile, currentUser.name)
+      await uploadFn(selectedFile)
       toast.success('عملیات شما با موفقیت ثبت شد. نتیجه را در تاریخچه مشاهده کنید.')
       loadHistory()
       resetFileState()

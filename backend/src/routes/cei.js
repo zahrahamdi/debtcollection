@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
 const { computeCei } = require('../db/cei');
+const { getActorName } = require('../utils/requestUser');
 
 const CREDIT_TYPES = ['loan', 'bnpl'];
 
@@ -89,7 +90,8 @@ router.get('/', (req, res) => {
  */
 router.put('/', (req, res) => {
   try {
-    const { credit_type, params, change_note, user_name } = req.body || {};
+    const { credit_type, params, change_note } = req.body || {};
+    const userName = getActorName(req);
     if (!CREDIT_TYPES.includes(credit_type)) {
       return res.status(400).json({ error: 'نوع اعتبار نامعتبر است' });
     }
@@ -113,7 +115,7 @@ router.put('/', (req, res) => {
         $v: nextVersion,
         $p: JSON.stringify(params),
         $note: change_note || `به‌روزرسانی نسخه ${nextVersion}`,
-        $user: user_name || 'ادمین',
+        $user: userName,
       }
     );
 

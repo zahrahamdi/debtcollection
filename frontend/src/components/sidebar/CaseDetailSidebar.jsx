@@ -15,7 +15,7 @@ import {
 import Badge from '../table/Badge'
 import { fetchCaseById } from '../../api/cases'
 import { formatRial, formatJalaliDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
-import { currentUser, isAdmin } from '../../utils/auth'
+import { getCurrentUser, isAdmin, isNegotiator } from '../../utils/auth'
 import {
   caseStatusLabel,
   caseStatusTone,
@@ -71,10 +71,11 @@ const NEGOTIATOR_CALL_STATUSES = ['pending_negotiator_call', 'pending_negotiator
 function canUserRegisterCall(detail) {
   if (!detail) return false
   if (isAdmin()) return true
+  const user = getCurrentUser()
   if (
-    currentUser.role === 'negotiator' &&
+    isNegotiator(user) &&
     detail.assigned_negotiator_id != null &&
-    Number(detail.assigned_negotiator_id) === Number(currentUser.negotiatorId)
+    Number(detail.assigned_negotiator_id) === Number(user.negotiator_id)
   ) {
     return true
   }

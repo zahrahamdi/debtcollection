@@ -3,7 +3,6 @@ import toast from 'react-hot-toast'
 import { Check } from 'lucide-react'
 import Modal from './Modal'
 import { assignCase } from '../../api/cases'
-import { currentUser } from '../../utils/auth'
 import { toFaDigits } from '../../utils/format'
 import { cooperationTypeLabel } from '../../utils/constants'
 
@@ -28,7 +27,7 @@ export default function AssignModal({ open, onClose, caseRow, mode, negotiators,
     setSaving(true)
     setError('')
     try {
-      await assignCase(caseRow.id, selected, currentUser.name)
+      await assignCase(caseRow.id, selected)
       toast.success(isReassign ? 'پرونده تخصیص مجدد یافت.' : 'پرونده تخصیص یافت.')
       setSelected(null)
       onAssigned()

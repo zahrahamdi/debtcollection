@@ -17,7 +17,8 @@
 7. [دیتابیس](#۷-دیتابیس)
 8. [تاریخ، زمان و وضعیت اقدام](#۸-تاریخ-زمان-و-وضعیت-اقدام)
 9. [متغیرهای محیطی و اسکریپت‌ها](#۹-متغیرهای-محیطی-و-اسکریپت‌ها)
-10. [احراز هویت و دسترسی (دمو)](#۱۰-احراز-هویت-و-دسترسی-دمو)
+10. [احراز هویت و دسترسی](#۱۰-احراز-هویت-و-دسترسی)
+11. [تست، Refactor و بدهی فنی](#۱۱-تست-refactor-و-بدهی-فنی)
 
 ---
 
@@ -25,8 +26,8 @@
 
 ```
 ┌─────────────────┐     HTTP/JSON      ┌──────────────────────────────────┐
-│  React (Vite)   │ ◄────────────────► │  Express (port 3000)             │
-│  port 5173      │                    │  routes → services → db (sql.js) │
+│  React (Vite)   │ ◄── Bearer JWT ──► │  Express (port 3000)             │
+│  port 5173      │                    │  middleware → routes → services  │
 └─────────────────┘                    └──────────────┬───────────────────┘
                                                     │
                     ┌───────────────────────────────┼───────────────────────┐
@@ -55,27 +56,54 @@ Excel/Sheet → case-import → CEI → سگمنت → استراتژی
 ```
 backend/src/
 ├── server.js                 # initDatabase → createApp → listen → startScheduler
-├── app.js                    # mount همه routeها زیر /api/*
-├── db/
-│   ├── database.js           # sql.js: init, query, run, persist, migrateSchema, sanitizeParams
-│   ├── schema.sql            # DDL جداول
-│   ├── seed.js               # داده دمو
-│   ├── cei.js                # computeCei, applyCeiBoost
-│   ├── segmentUtil.js        # بازه CEI، overlap، validateCondition
-│   ├── dateUtil.js           # تاریخ شمسی/میلادی، next_action_date، calcActionStatus
-│   ├── strategyActions.js    # CRUD/validate اقدام‌ها + repeat_on_results
-│   └── lastAction.js         # resolve last_action از case_actions + تخصیص ★
-├── routes/                   # thin controllers — parse request, call service, JSON response
-│   └── reports.js            # گزارشات: cases, funnel, strategies, negotiators ★
-└── services/                 # business logic
-    ├── strategy-engine.service.js   # اجرای خودکار استراتژی ★
-    ├── case-import.service.js       # Excel پرونده + pipeline CEI/سگمنت/استراتژی
-    ├── payment-import.service.js    # Excel پرداخت + resume استراتژی
-    ├── bulk-assign.service.js       # تخصیص گروهی Excel
-    ├── sms.service.js               # Kavenegar / SMS_MOCK
-    ├── scheduler.js                 # cron هر دقیقه → strategyEngine.run()
-    └── debtor-cleanup.service.js    # حذف بدهکار
+├── app.js                    # mount routes + authenticate / requireAdmin
+├── middleware/
+│   └── auth.middleware.js    # authenticate, authorize, requireAdmin
+├── routes/
+│   ├── auth.routes.js        # register, login, forgot-password, me
+│   ├── users.routes.js       # مدیریت ادمین‌ها (admin)
+│   ├── cases.js              # ⚠ fat route (~850 خط)
+│   ├── reports.js            # ⚠ fat route (~1400 خط)
+│   └── …                     # debtors, bulk, strategies, …
+├── services/
+│   ├── auth.service.js       # JWT, bcrypt, RBAC helpers ★
+│   ├── strategy-engine.service.js
+│   ├── case-import.service.js
+│   ├── payment-import.service.js
+│   ├── bulk-assign.service.js
+│   ├── sms.service.js
+│   ├── scheduler.js
+│   └── debtor-cleanup.service.js
+├── utils/
+│   └── requestUser.js        # getActorName(req) از req.user
+└── db/
+    ├── database.js           # sql.js + migrateSchema
+    ├── schema.sql
+    ├── seed.js               # دمو + users/roles/permissions
+    ├── cei.js, dateUtil.js, segmentUtil.js, strategyActions.js, lastAction.js
 ```
+
+### ۲.۴ Mounting و Auth در `app.js`
+
+| Prefix | Middleware |
+|--------|------------|
+| `/api/health`, `/api/auth` | بدون authenticate |
+| `/api/cases`, `/api/debtors`, `/api/negotiators`, `/api/gsheet` | `authenticate` |
+| `/api/settings`, `/api/cei-formulas`, `/api/segments`, `/api/strategies`, `/api/ab-tests`, `/api/bulk`, `/api/reports`, `/api/users` | `authenticate` + `requireAdmin` |
+| `POST/PUT /api/negotiators` | `requireAdmin` داخل router |
+
+**نکته:** middleware `authorize(resource, action)` تعریف شده ولی **هنوز روی routeها اعمال نشده** — فقط admin/non-admin.
+
+### ۲.۵ لایه‌های ناقص (بدهی معماری)
+
+| ماژول | مشکل | refactor پیشنهادی |
+|--------|------|-------------------|
+| `routes/cases.js` | منطق assign/call-outcome در route | `services/cases.service.js` |
+| `routes/reports.js` | SQL و aggregation در route | `services/reports.service.js` |
+| Error handling | بدون middleware مرکزی | `middleware/errorHandler.js` |
+| Transactions | assign/call-outcome چند `run()` بدون transaction | wrap در service |
+
+---
 
 ### ۲.۱ لایه دیتابیس (`database.js`)
 
@@ -121,33 +149,22 @@ backend/src/
 frontend/src/
 ├── main.jsx, App.jsx
 ├── routes/
-│   ├── AppRoutes.jsx         # /cases, /debtors, /strategies, /reports, … (بدون ProtectedRoute)
-│   └── navItems.js           # منوی sidebar + adminOnly
+│   ├── AppRoutes.jsx         # ProtectedRoute + Login/Register/Waiting
+│   └── navItems.js           # sidebar + adminOnly
 ├── pages/
-│   ├── Cases.jsx             # جدول پرونده + سایدبار + مدال تماس/تخصیص
-│   ├── Strategies.jsx        # CRUD استراتژی + AbTestModal + normalizeStrategyAction
-│   ├── BulkOperations.jsx    # آپلود Excel — guard admin
-│   ├── Reports.jsx           # گزارشات: ۳ تب (cases / strategies / negotiators) ★
-│   ├── History.jsx           # Audit Trail سراسری
-│   ├── Debtors.jsx           # لیست بدهکاران
-│   ├── Installments.jsx      # اقساط
-│   ├── Negotiators.jsx       # مذاکره‌کنندگان
-│   └── AdminPanel.jsx        # CEI، سگمنت، تنظیمات، …
+│   ├── Login.jsx, Register.jsx, ForgotPassword.jsx, WaitingForRole.jsx ★
+│   ├── Cases.jsx, Strategies.jsx, BulkOperations.jsx, Reports.jsx
+│   ├── History.jsx, Debtors.jsx, Installments.jsx, Negotiators.jsx
+│   └── AdminPanel.jsx        # + AdminUsersSettings (مدیریت ادمین‌ها)
 ├── components/
-│   ├── charts/               # Recharts — chartUtils, ActionDistributionPieChart, CostByActionChart ★
-│   ├── reports/              # FunnelFlowChart (React Flow) ★
-│   ├── table/                # CasesTable, CasesFilters, Badge
-│   ├── sidebar/              # CaseDetailSidebar, DebtorDetailSidebar
-│   ├── modal/                # CallOutcomeModal, AssignModal
-│   └── admin/                # StrategyActionsBuilder (RepeatResultsMultiSelect), …
+│   ├── ProtectedRoute.jsx    # token / role / adminOnly ★
+│   ├── charts/, reports/, table/, sidebar/, modal/, admin/
 ├── api/
-│   ├── client.js             # axios — بدون Authorization header
-│   └── reports.js            # fetchCasesReport, fetchFunnelReport, …
+│   ├── client.js             # axios + Bearer interceptor + 401 redirect ★
+│   ├── auth.js, users.js     # login, register, مدیریت ادمین ★
+│   └── reports.js, cases.js, …
 └── utils/
-    ├── constants.js          # CASE_STATUS (۱۵), ACTION_TYPE, HISTORY_OPERATIONS
-    ├── format.js             # formatRial, toFaDigits, formatDate
-    ├── historyDetails.js     # فرمت جزئیات case_history برای UI
-    └── auth.js               # currentUser mock + isAdmin() ★
+    ├── auth.js               # getToken, isAdmin, hasPermission, logout ★
 ```
 
 **نمودارها (Recharts):** کانتینر LTR (`ChartContainer`) برای جلوگیری از clip در RTL؛ محور عددی با ارقام لاتین؛ برچسب فارسی با `foreignObject`. رنگ ثابت اقدامات در `actionPieConfig.js`.
@@ -352,9 +369,27 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 ### Health
 
-| Method | Path | توضیح |
-|--------|------|--------|
-| GET | `/health` | `{ ok: true }` |
+| Method | Path | Auth | توضیح |
+|--------|------|------|--------|
+| GET | `/health` | — | `{ ok: true }` |
+
+### Auth — `/auth`
+
+| Method | Path | Auth | Body | توضیح |
+|--------|------|------|------|--------|
+| POST | `/register` | — | `first_name`, `last_name`, `username`, `email`, `password` | ثبت‌نام بدون نقش |
+| POST | `/login` | — | `username`, `password` | JWT 8h + user + roles + permissions |
+| POST | `/forgot-password` | — | `email`, `new_password`, `confirm_password` | تغییر رمز (دمو — بدون OTP) |
+| GET | `/me` | Bearer | — | کاربر جاری |
+| POST | `/logout` | — | — | stateless — client token را پاک می‌کند |
+
+### Users — `/users` (admin)
+
+| Method | Path | Query / Body | توضیح |
+|--------|------|--------------|--------|
+| GET | `/` | `has_role`, `without_role=negotiator` | لیست کاربران |
+| POST | `/:id/assign-admin` | — | تخصیص نقش admin |
+| DELETE | `/:id/remove-admin` | — | حذف admin (نه سوپر ادمین / نه آخرین admin) |
 
 ### Cases — `/cases`
 
@@ -364,7 +399,7 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 | GET | `/:id` | — | جزئیات + actions + … — `last_action` resolve شده |
 | GET | `/:id/history` | `operation`, `user_name`, `from_date`, `to_date` | Audit Trail پرونده |
 | GET | `/:id/installments` | — | اقساط پرونده |
-| POST | `/:id/assign` | `{ negotiator_id, user_name? }` | تخصیص / تخصیص مجدد |
+| POST | `/:id/assign` | `{ negotiator_id }` | تخصیص / تخصیص مجدد — `user_name` از token |
 | POST | `/:id/call-outcome` | `{ call_status, call_duration?, … }` | ثبت خروجی تماس — `call_duration` اجباری فقط برای «پاسخگو بود» / «ناسزا گفت»؛ برای «پاسخگو نبود» → ۰ و هزینه ۰ |
 
 ### Debtors — `/debtors`
@@ -447,8 +482,8 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 | Method | Path | Body (multipart) | توضیح |
 |--------|------|------------------|--------|
-| POST | `/upload-cases` | `file`, `user_name?` | Excel پرونده |
-| POST | `/upload-payments` | `file`, `user_name?` | Excel پرداخت |
+| POST | `/upload-cases` | `file` | Excel پرونده — `user_name` از token |
+| POST | `/upload-payments` | `file` | Excel پرداخت |
 | POST | `/assign-cases` | `file` | تخصیص گروهی |
 | POST | `/reassign-cases` | `file` | تخصیص مجدد |
 | POST | `/delete-all-except-mobile` | `{ mobile }` | پاکسازی DB |
@@ -499,11 +534,12 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 | `case_history` | Audit Trail |
 | `promises` | تعهد پرداخت (PTP) |
 | `installments`, `payments` | اقساط و پرداخت |
-| `negotiators` | موجودیت کسب‌وکار مذاکره‌کننده (**نه** حساب login) |
-| `cei_formulas`, `settings`, `settings_history` | پیکربندی + `user_name` audit |
-| `bulk_operations` | لاگ آپلودهای گروهی + `user_name` |
+| `negotiators` | موجودیت عملیاتی + `user_id` → `users` |
+| `users`, `roles`, `user_roles`, `permissions`, `role_permissions` | احراز هویت و RBAC ★ |
+| `cei_formulas`, `settings`, `settings_history` | پیکربندی + audit |
+| `bulk_operations` | لاگ آپلودهای گروهی |
 
-**جداول وجود ندارد:** `users`, `roles`, `permissions`, `sessions` — برای production باید اضافه شوند.
+**Schema drift (بدهی):** API اقساط فیلدهای `penalty_waiver`, `bank_settlement`, `guarantee_withdrawal` را برمی‌گرداند ولی در `schema.sql` تعریف نشده‌اند — همیشه 0.
 
 ### فیلدهای مهم `cases`
 
@@ -548,6 +584,7 @@ cost, avg_call_duration
 
 | متغیر | پیش‌فرض | توضیح |
 |--------|---------|--------|
+| `JWT_SECRET` | — | **اجباری production** — کلید امضای JWT |
 | `PORT` | 3000 | پورت سرور |
 | `KAVENEGAR_API_KEY` | — | کلید API |
 | `KAVENEGAR_SENDER` | — | خط فرستنده |
@@ -587,64 +624,108 @@ cost, avg_call_duration
 
 ---
 
-## ۱۰. احراز هویت و دسترسی (دemo)
+## ۱۰. احراز هویت و دسترسی
 
-### ۱۰.۱ وضعیت فعلی
+### ۱۰.۱ پیاده‌سازی فعلی
 
-| قابلیت | پیاده‌سازی |
-|--------|------------|
-| Login / Register | **ندارد** |
-| JWT / Session / Cookie | **ندارد** |
-| Backend auth middleware | **ندارد** |
-| جدول users/roles | **ندارد** |
-| SSO (production) | **برنامه‌ریزی شده** — PRD §۱۰.۴ |
+| قابلیت | وضعیت |
+|--------|--------|
+| Login / Register / Forgot password | ✅ |
+| JWT (8h) + bcrypt | ✅ |
+| جداول `users`, `roles`, `permissions` | ✅ |
+| `authenticate` middleware | ✅ |
+| `requireAdmin` روی admin routes | ✅ |
+| `authorize(resource, action)` | ⚠️ تعریف شده، **اعمال نشده** |
+| SSO production | ❌ برنامه آینده |
 
-### ۱۰.۲ Mock فرانت (`frontend/src/utils/auth.js`)
+### ۱۰.۲ Backend
+
+**فایل‌ها:** `services/auth.service.js` · `middleware/auth.middleware.js` · `routes/auth.routes.js` · `routes/users.routes.js`
 
 ```javascript
-export const currentUser = {
-  name: 'زهرا حمیدی',
-  role: 'admin', // admin | negotiator
-  // negotiatorId: 1  — برای تست نقش مذاکره‌کننده
-}
-export const isAdmin = () => currentUser.role === 'admin'
+// loadUserAuthPayload → roles[], permissions[], negotiator_id
+signToken(userId)  // JWT 8h
+getActorName(req)   // first_name + last_name در history/settings/bulk
 ```
 
-### ۱۰.۳ معماری کنترل دسترسی (UI-only)
+**Seed admin:** `zahra.hamdi` / `Admin@1234` · `is_super_admin=1` · لینک به negotiator زهرا حمیدی
 
-```
-auth.js (mock)
-    ├── Sidebar — navItems.filter(adminOnly)
-    ├── Reports.jsx, BulkOperations.jsx — Navigate guard
-    ├── Cases / Strategies / Negotiators — دکمه‌های admin
-    ├── RowActionsMenu — تخصیص فقط admin
-    └── CaseDetailSidebar — canUserRegisterCall()
-            admin → همه
-            negotiator → assigned_negotiator_id === negotiatorId
-```
+**Permissions در seed:** admin → همه؛ negotiator → subset (cases:view/assign, debtors, call_outcome, …)
 
-**مسیرها در `AppRoutes.jsx` محافظت نشده‌اند** — دسترسی مستقیم URL به `/admin` یا `/reports` ممکن است (guard فقط داخل بعضی صفحات).
+### ۱۰.۳ Frontend
 
-### ۱۰.۴ Audit بدون هویت واقعی
+**صفحات:** `Login`, `Register`, `ForgotPassword`, `WaitingForRole`  
+**Guard:** `ProtectedRoute` — token → role → adminOnly  
+**Utils:** `utils/auth.js` — `getToken`, `isAdmin`, `hasPermission`, `logout`  
+**API:** `api/auth.js`, `api/client.js` (Bearer + 401 redirect)
 
-Backend فیلد `user_name` را از body/query می‌گیرد (مثلاً `POST /cases/:id/assign`, bulk upload, settings). fallback: `'ادمین'` / `'مذاکره‌کننده'`. **قابل جعل** — تا پیاده‌سازی auth واقعی.
+**کنترل UI:** عمدتاً `isAdmin()` — `hasPermission()` هنوز استفاده نشده.
 
-### ۱۰.۵ نقش‌ها (PRD §۳)
+### ۱۰.۴ بدهی امنیتی (باید قبل از production بسته شود)
 
-| نقش | `role` | دسترسی خلاصه |
-|-----|--------|--------------|
-| ادمین وصول | `admin` | همه صفحات + bulk + گزارشات + ادمین پنل |
-| مذاکره‌کننده | `negotiator` | بدهکاران، پرونده‌ها، اقساط، تاریخچه؛ تماس فقط پرونده خود |
+| # | موضوع | شدت |
+|---|--------|-----|
+| 1 | `authorize()` روی assign/call-outcome/debtors enforce نشده | CRITICAL |
+| 2 | call-outcome: backend مالکیت پرونده negotiator را چک نمی‌کند | CRITICAL |
+| 3 | forgot-password بدون OTP/token | HIGH |
+| 4 | register باز — کاربر بدون نقش به API دسترسی دارد | HIGH |
+| 5 | JWT_SECRET fallback در کد | MEDIUM |
 
-جدول کامل: [PRD-DigiPay.md §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
+### ۱۰.۵ نقش‌ها (PRD §۳.۳)
 
-### ۱۰.۶ مسیر پیشنهادی production
+| نقش | دسترسی خلاصه |
+|-----|--------------|
+| admin | همه صفحات admin + bulk + گزارشات |
+| negotiator | بدهکاران، پرونده‌ها، اقساط، تاریخچه؛ تماس **فقط** پرونده خود (UI ✅ / API ⚠️) |
 
-1. جدول `users` (`id`, `email`, `password_hash`, `role`, `negotiator_id` nullable)
-2. `POST /api/auth/login` → JWT
-3. Express middleware `requireAuth` + `requireRole('admin')`
-4. `ProtectedRoute` در React + ذخیره token
-5. حذف mock از `auth.js`؛ `user_name` از `req.user` سرور
+جدول کامل: [PRD §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
+
+---
+
+## ۱۱. تست، Refactor و بدهی فنی
+
+### ۱۱.۱ وضعیت تست
+
+| لایه | وضعیت |
+|------|--------|
+| Unit (Vitest) | ❌ |
+| Integration (supertest) | ❌ |
+| Component (RTL) | ❌ |
+| E2E (Playwright) | ❌ |
+
+`backend/package.json`: `"test": "Error: no test specified"`
+
+### ۱۱.۲ پلن پیشنهادی (ترکیبی refactor + test)
+
+| فاز | مدت | کار | تست همراه |
+|-----|-----|-----|-----------|
+| 0 | ۳ روز | Vitest setup، schema installments، disable cron در test | ~20 unit |
+| 1 | ۱ هفته | enforce RBAC، call-outcome ownership | ~25 integration |
+| 2 | ۲ هفته | `cases.service`, `reports.service` | unit + int per PR |
+| 3 | ۱ هفته | GSheet decision، AB test UI، legacy negotiator users | E2E smoke |
+| 4 | ۱ هفته | Playwright regression + CI | 8–10 spec |
+
+### ۱۱.۳ بدهی فنی اولویت‌دار
+
+| ID | موضوع | شدت |
+|----|--------|-----|
+| R1 | Fat routes (`cases`, `reports`) | HIGH |
+| R2 | RBAC dead code (`authorize` unused) | CRITICAL |
+| R3 | Schema drift installments | HIGH |
+| R4 | Scheduler همیشه on — DB non-deterministic | HIGH |
+| R5 | No global error handler / transactions | MEDIUM |
+| R6 | GSheet sync UI بدون backend | HIGH |
+| R7 | AB test: create only، no list/delete UI | MEDIUM |
+| R8 | Legacy negotiators بدون `user_id` | MEDIUM |
+| R9 | `GET /cases` in-memory pagination | MEDIUM |
+| R10 | PRD §۳.۴ outdated | LOW |
+
+### ۱۱.۴ ابزارهای پیشنهادی
+
+- Backend: **Vitest** + **supertest**
+- Frontend: **Vitest** + **React Testing Library**
+- E2E: **Playwright**
+- CI: GitHub Actions — unit → integration → e2e (main)
 
 ---
 
@@ -654,4 +735,4 @@ Backend فیلد `user_name` را از body/query می‌گیرد (مثلاً `P
 
 ---
 
-*آخرین به‌روزرسانی: گزارشات (Reports API + Recharts/React Flow) · احراز هویت mock · PRD §۱۰*
+*آخرین به‌روزرسانی: احراز هویت JWT/RBAC · مدیریت ادمین‌ها · audit معماری و پلن تست*

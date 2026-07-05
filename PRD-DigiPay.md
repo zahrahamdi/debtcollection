@@ -2,7 +2,7 @@
 ## سیستم وصول مطالبات دیجی‌پی
 
 > نسخه اول — Product Requirements Document  
-> **به‌روزرسانی:** هم‌راستا با پیاده‌سازی نسخه دمو (بخش ۱۰، **۵.۱۱** `last_action`، **گزارشات**، **احراز هویت mock**)
+> **به‌روزرسانی:** auth JWT/RBAC · گزارشات · audit معماری · پلن تست/refactor (بخش ۱۰.۹)
 > سند مرجع مشترک تیم‌های محصول، طراحی و توسعه
 
 ---
@@ -198,20 +198,22 @@
 
 ## ۳.۴ پیاده‌سازی دسترسی در نسخه دمو
 
-> مرجع فنی: [TECHNICAL.md §۱۰](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی-دمو)
+> مرجع فنی: [TECHNICAL.md §۱۰](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی)
 
 | موضوع | وضعیت دمو |
 |--------|-----------|
-| Login / Register | **پیاده نشده** |
-| SSO / JWT | **برنامه production** |
-| جدول `users` / `roles` | **وجود ندارد** |
-| کنترل نقش | Mock در `frontend/src/utils/auth.js` — `role: admin \| negotiator` |
-| Backend | **بدون** middleware امنیتی؛ APIها عمومی |
-| Audit | فیلد `user_name` (متن) در history، settings، bulk — از body فرانت |
+| Login / Register / Forgot password | **پیاده شده** — JWT 8h |
+| جدول `users` / `roles` / `permissions` | **پیاده شده** |
+| Backend middleware | `authenticate` + `requireAdmin` |
+| RBAC granular | **seed شده، enforce ناقص** |
+| Frontend | `ProtectedRoute` + صفحات auth |
+| Audit | `user_name` از `req.user` (سرور) |
 
-**نقش‌ها در UI:** `isAdmin()` برای مخفی‌کردن منو (`adminOnly`)، guard صفحات گزارشات/عملیات گروهی، و محدودیت ثبت تماس مذاکره‌کننده به پرونده تخصیص‌یافته (`negotiatorId`).
+**کاربر seed:** `zahra.hamdi` / `Admin@1234` — admin + سوپر ادمین
 
-**تفکیک مذاکره‌کننده (داده) vs کاربر (login):** جدول `negotiators` موجودیت عملیاتی است (ظرفیت، حقوق ساعتی) و **حساب ورود نیست**.
+**تفکیک negotiator vs user:** `negotiators.user_id` → `users`
+
+**ثبت‌نام:** بدون نقش → `/waiting`
 
 ## ۳.۵ وابستگی‌ها
 
@@ -1373,14 +1375,17 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 
 | قابلیت | وضعیت |
 |--------|--------|
-| Login / Register | **ندارد** |
-| JWT / Session | **ندارد** |
-| جدول `users` | **ندارد** |
-| Frontend | Mock: `frontend/src/utils/auth.js` — `{ name, role: admin \| negotiator }` |
-| Backend middleware | **ندارد** — همه API بدون token |
-| Production | SSO / auth واقعی — [§۳.۴](#۳۴-پیاده‌سازی-دسترسی-در-نسخه-دمو) |
+| Login / Register / Forgot password | ✅ |
+| JWT + bcryptjs | ✅ |
+| جداول RBAC | ✅ |
+| ProtectedRoute + interceptor | ✅ |
+| مدیریت ادمین‌ها | ✅ |
+| `authorize()` per permission | ⚠️ ناقص |
+| SSO production | ❌ آینده |
 
-فیلد `user_name` در audit (history، settings، bulk) از body فرانت می‌آید و تا زمان auth واقعی **قابل جعل** است.
+API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۶](./TECHNICAL.md#auth--auth).
+
+`user_name` در audit از `req.user` پر می‌شود.
 
 ## ۱۰.۵ انحراف‌های آگاهانه از PRD اولیه
 
@@ -1389,7 +1394,8 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 | واحد زمان انتظار اقدام | روز | **دقیقه** (`wait_next_minutes` / `wait_repeat_minutes`) |
 | حداکثر تکرار | فقط Negotiator Call | **همه** انواع اقدام — `max_repeat` |
 | پایان استراتژی بدون پرداخت | مستقیم حقوقی | **CEI Boost** + سگمنت/استراتژی بعدی یا حقوقی در آخرین سگمنت |
-| Google Sheet | سینک دوطرفه | فقط تست URL |
+| Google Sheet | سینک دوطرفه | فقط تست URL — دکمه sync در UI toast stub |
+| Auth | mock فرانت | **JWT واقعی** — RBAC enforce ناقص |
 | نتایج SMS/Autocall | جزئیات باز | Mock با weighted random |
 | برچسب UI | «اکشن» | **«اقدام»** |
 | مدت تماس در ثبت خروجی | همیشه اجباری | **پاسخگو نبود** → غیرفعال، مدت ۰، هزینه ۰ |
@@ -1401,7 +1407,8 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 | ابزار | مسیر |
 |---|---|
 | دیباگ پرونده با `credit_id` | `backend/scripts/inspect-case.js` |
-| Seed داده دمو | `backend/src/db/seed.js` |
+| Seed داده دمو + auth | `backend/src/db/seed.js` |
+| کاربر admin seed | `zahra.hamdi` / `Admin@1234` |
 
 ## ۱۰.۷ نوع اقدام در فیلترها
 
@@ -1437,3 +1444,46 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 - `frontend/src/components/charts/` — `actionPieConfig.js` (رنگ/ترتیب ثابت اقدامات)، `CostByActionChart`, `ActionDistributionPieChart`
 - `FunnelFlowChart.jsx` — React Flow
 - محور عددی: ارقام لاتین؛ برچسب فارسی: `foreignObject` + RTL؛ کانتینر LTR برای جلوگیری از clip
+
+## ۱۰.۹ موارد ناقص / بدهی فنی (audit ۱۴۰۴)
+
+> جزئیات فنی: [TECHNICAL.md §۱۱](./TECHNICAL.md#۱۱-تست-refactor-و-بدهی-فنی)
+
+### CRITICAL — قبل از production
+
+- `authorize(resource, action)` روی routeها enforce نشده
+- call-outcome و assign: backend مالکیت negotiator را validate نمی‌کند
+- forgot-password بدون verification token
+
+### HIGH — feature gap
+
+- Google Sheet sync: UI دارد، backend ندارد
+- Schema installments: ستون‌های API در DB نیست
+- Fat routes: `cases.js`, `reports.js` بدون service layer
+- Scheduler هر دقیقه DB را mutate می‌کند — مانع تست deterministic
+
+### MEDIUM — UX / data
+
+- AB Test: فقط create؛ list/delete UI ندارد
+- History/Installments از nav بدون `case_id` خالی
+- مذاکره‌کنندگان legacy (علی رضایی، سارا محمدی) بدون `user_id`
+- تخصیص حقوقی: menu disabled
+- `/waiting` بدون poll نقش جدید
+
+### LOW
+
+- `PlaceholderPage.jsx` orphan
+- deprecated report endpoints در frontend
+- bulk delete-by-mobile بدون UI
+
+## ۱۰.۱۰ پلن تست و refactor (خلاصه)
+
+| فاز | هدف |
+|-----|-----|
+| 0 | Vitest + test DB + fix schema |
+| 1 | RBAC enforce + auth integration tests |
+| 2 | Service layer (`cases`, `reports`) |
+| 3 | Feature gaps (GSheet, AB, legacy users) |
+| 4 | Playwright E2E + CI |
+
+**وضعیت فعلی:** هیچ automated test وجود ندارد.
