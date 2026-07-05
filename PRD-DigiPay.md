@@ -2,7 +2,7 @@
 ## سیستم وصول مطالبات دیجی‌پی
 
 > نسخه اول — Product Requirements Document  
-> **به‌روزرسانی:** auth JWT/RBAC · گزارشات · audit معماری · پلن تست/refactor (بخش ۱۰.۹)
+> **به‌روزرسانی:** RBAC enforce · service layer · pagination SQL · hasPermission UI · VITE_API_URL
 > سند مرجع مشترک تیم‌های محصول، طراحی و توسعه
 
 ---
@@ -204,16 +204,17 @@
 |--------|-----------|
 | Login / Register / Forgot password | **پیاده شده** — JWT 8h |
 | جدول `users` / `roles` / `permissions` | **پیاده شده** |
-| Backend middleware | `authenticate` + `requireAdmin` |
-| RBAC granular | **seed شده، enforce ناقص** |
-| Frontend | `ProtectedRoute` + صفحات auth |
+| Backend middleware | `authenticate` + `authorize()` روی routeهای حساس |
+| RBAC granular | **enforce شده** — bulk/reports/users/settings/strategies/… |
+| call-outcome ownership | **پیاده شده** — `requireCallOutcomeAccess` |
+| Frontend | `ProtectedRoute` + `hasPermission()` در Cases/Sidebar/RowActions |
 | Audit | `user_name` از `req.user` (سرور) |
 
 **کاربر seed:** `zahra.hamdi` / `Admin@1234` — admin + سوپر ادمین
 
 **تفکیک negotiator vs user:** `negotiators.user_id` → `users`
 
-**ثبت‌نام:** بدون نقش → `/waiting`
+**ثبت‌نام:** JWT با `has_role: false` → `/waiting`
 
 ## ۳.۵ وابستگی‌ها
 
@@ -1342,7 +1343,7 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 
 | صفحه | وضعیت |
 |---|---|
-| پرونده‌ها (`Cases`) | کامل — فیلتر، سایدبار، ثبت تماس |
+| پرونده‌ها (`Cases`) | کامل — فیلتر SQL، **pagination سرور**، سایدبار، ثبت تماس |
 | بدهکاران (`Debtors`) | کامل |
 | اقساط (`Installments`) | کامل |
 | تاریخچه (`History`) | کامل — فیلتر ۵ نوع اقدام |
@@ -1356,6 +1357,7 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 
 | Endpoint | کاربرد |
 |---|---|
+| `GET /api/cases` | لیست paginated — `page`, `limit`, فیلتر SQL |
 | `GET /api/cases/:id/history` | تاریخچه یک پرونده |
 | `GET /api/debtors` ، `GET /api/debtors/:id` | لیست/جزئیات بدهکار |
 | `POST /api/debtors/:id/phone-numbers` | افزودن شماره تماس |
@@ -1380,12 +1382,12 @@ Amount برابر مطالبات به ریال در لحظه محاسبه شاخ
 | جداول RBAC | ✅ |
 | ProtectedRoute + interceptor | ✅ |
 | مدیریت ادمین‌ها | ✅ |
-| `authorize()` per permission | ⚠️ ناقص |
+| `authorize()` per permission | ✅ روی routeهای admin/bulk/reports/… |
 | SSO production | ❌ آینده |
 
-API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۶](./TECHNICAL.md#auth--auth).
+**ثبت‌نام:** پاسخ شامل `token` + `has_role: false` — redirect به `/waiting`
 
-`user_name` در audit از `req.user` پر می‌شود.
+API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۱۰](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی)
 
 ## ۱۰.۵ انحراف‌های آگاهانه از PRD اولیه
 
@@ -1395,7 +1397,9 @@ API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۶](./TECH
 | حداکثر تکرار | فقط Negotiator Call | **همه** انواع اقدام — `max_repeat` |
 | پایان استراتژی بدون پرداخت | مستقیم حقوقی | **CEI Boost** + سگمنت/استراتژی بعدی یا حقوقی در آخرین سگمنت |
 | Google Sheet | سینک دوطرفه | فقط تست URL — دکمه sync در UI toast stub |
-| Auth | mock فرانت | **JWT واقعی** — RBAC enforce ناقص |
+| Auth | mock فرانت | **JWT + RBAC enforce** |
+| لیست پرونده‌ها | فیلتر in-memory | **SQL WHERE + LIMIT/OFFSET** |
+| Backend routes | monolithic | **cases.service + reports.service** |
 | نتایج SMS/Autocall | جزئیات باز | Mock با weighted random |
 | برچسب UI | «اکشن» | **«اقدام»** |
 | مدت تماس در ثبت خروجی | همیشه اجباری | **پاسخگو نبود** → غیرفعال، مدت ۰، هزینه ۰ |
@@ -1449,18 +1453,24 @@ API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۶](./TECH
 
 > جزئیات فنی: [TECHNICAL.md §۱۱](./TECHNICAL.md#۱۱-تست-refactor-و-بدهی-فنی)
 
-### CRITICAL — قبل از production
+### ✅ انجام‌شده (refactor اخیر)
 
-- `authorize(resource, action)` روی routeها enforce نشده
-- call-outcome و assign: backend مالکیت negotiator را validate نمی‌کند
+- `authorize()` روی routeهای bulk/reports/users/settings/strategies/negotiators
+- `requireCallOutcomeAccess` — مالکیت پرونده negotiator
+- Service layer: `cases.service.js`, `reports.service.js`
+- Pagination SQL در `GET /api/cases`
+- Validation: call-outcome روی `paid`/`burned` + anti double-submit (۱۰ ثانیه)
+- `hasPermission()` در UI — Sidebar، RowActions، GSheet sync
+- `VITE_API_URL` · حذف `PlaceholderPage` · حذف `currentUser` proxy
+
+### CRITICAL / HIGH — قبل از production
+
 - forgot-password بدون verification token
-
-### HIGH — feature gap
-
+- کاربر بدون نقش: دسترسی به APIهای authenticate‌شده (غیر admin)
 - Google Sheet sync: UI دارد، backend ندارد
 - Schema installments: ستون‌های API در DB نیست
-- Fat routes: `cases.js`, `reports.js` بدون service layer
 - Scheduler هر دقیقه DB را mutate می‌کند — مانع تست deterministic
+- **هیچ automated test**
 
 ### MEDIUM — UX / data
 
@@ -1472,18 +1482,18 @@ API: `/api/auth/*`, `/api/users/*` — جزئیات در [TECHNICAL §۶](./TECH
 
 ### LOW
 
-- `PlaceholderPage.jsx` orphan
 - deprecated report endpoints در frontend
 - bulk delete-by-mobile بدون UI
+- transactions / error handler مرکزی در backend
 
 ## ۱۰.۱۰ پلن تست و refactor (خلاصه)
 
-| فاز | هدف |
-|-----|-----|
-| 0 | Vitest + test DB + fix schema |
-| 1 | RBAC enforce + auth integration tests |
-| 2 | Service layer (`cases`, `reports`) |
-| 3 | Feature gaps (GSheet, AB, legacy users) |
-| 4 | Playwright E2E + CI |
+| فاز | هدف | وضعیت |
+|-----|-----|--------|
+| 0 | Vitest + test DB + fix schema | ⏳ |
+| 1 | RBAC enforce + auth integration tests | 🔶 RBAC ✅ · tests ❌ |
+| 2 | Service layer (`cases`, `reports`) | 🔶 services ✅ · error handler ❌ |
+| 3 | Feature gaps (GSheet, AB, legacy users) | ⏳ |
+| 4 | Playwright E2E + CI | ⏳ |
 
 **وضعیت فعلی:** هیچ automated test وجود ندارد.

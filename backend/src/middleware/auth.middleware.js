@@ -1,5 +1,6 @@
 'use strict';
 
+const { query } = require('../db/database');
 const { verifyToken, loadUserAuthPayload, hasPermission } = require('../services/auth.service');
 
 function extractToken(req) {
@@ -56,4 +57,31 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, authorize, requireAdmin, extractToken };
+/** مذاکره‌کننده فقط پرونده‌های تخصیص‌یافته به خودش؛ ادمین همه */
+function requireCallOutcomeAccess(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'احراز هویت نشده' });
+  }
+  if (req.user.roles?.includes('admin')) return next();
+
+  const id = Number(req.params.id);
+  const row = query('SELECT assigned_negotiator_id FROM cases WHERE id = $id', { $id: id })[0];
+  if (!row) return res.status(404).json({ error: 'پرونده یافت نشد' });
+
+  if (
+    req.user.negotiator_id != null &&
+    row.assigned_negotiator_id != null &&
+    Number(row.assigned_negotiator_id) === Number(req.user.negotiator_id)
+  ) {
+    return next();
+  }
+  return res.status(403).json({ error: 'دسترسی غیرمجاز' });
+}
+
+module.exports = {
+  authenticate,
+  authorize,
+  requireAdmin,
+  requireCallOutcomeAccess,
+  extractToken,
+};

@@ -37,13 +37,13 @@ function createApp() {
   app.use('/api/negotiators', authenticate, negotiatorsRouter);
   app.use('/api/gsheet', authenticate, gsheetRouter);
 
-  app.use('/api/settings', authenticate, requireAdmin, settingsRouter);
+  app.use('/api/settings', authenticate, settingsRouter);
   app.use('/api/cei-formulas', authenticate, requireAdmin, ceiRouter);
-  app.use('/api/segments', authenticate, requireAdmin, segmentsRouter);
-  app.use('/api/strategies', authenticate, requireAdmin, strategiesRouter);
+  app.use('/api/segments', authenticate, segmentsRouter);
+  app.use('/api/strategies', authenticate, strategiesRouter);
   app.use('/api/ab-tests', authenticate, requireAdmin, abTestsRouter);
-  app.use('/api/bulk', authenticate, requireAdmin, bulkRoutes);
-  app.use('/api/reports', authenticate, requireAdmin, reportsRoutes);
+  app.use('/api/bulk', authenticate, bulkRoutes);
+  app.use('/api/reports', authenticate, reportsRoutes);
   app.use('/api/users', authenticate, usersRouter);
 
   app.use((req, res) => {

@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db/database');
-const { requireAdmin } = require('../middleware/auth.middleware');
+const { authorize } = require('../middleware/auth.middleware');
 const {
   assignRoleToUser,
   removeRoleFromUser,
@@ -11,7 +11,7 @@ const {
   loadUserAuthPayload,
 } = require('../services/auth.service');
 
-router.use(requireAdmin);
+router.use(authorize('admin_panel', 'view'));
 
 /**
  * GET /api/users?has_role=true|false&without_role=negotiator

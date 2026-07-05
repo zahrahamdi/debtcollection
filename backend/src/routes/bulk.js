@@ -14,8 +14,10 @@ const {
 } = require('../services/bulk-assign.service');
 
 const { getActorName } = require('../utils/requestUser');
+const { authorize } = require('../middleware/auth.middleware');
 
 const router = express.Router();
+router.use(authorize('bulk_operations', 'view'));
 
 const upload = multer({
   storage: multer.memoryStorage(),

@@ -115,10 +115,14 @@ export default function CasesFilters({ filters, onChange, onSearch, onReset }) {
         </select>
 
         {/* مسئول پرونده */}
-        <select className={inputClass} value={filters.negotiator_name} onChange={set('negotiator_name')}>
+        <select
+          className={inputClass}
+          value={filters.assigned_negotiator_id}
+          onChange={set('assigned_negotiator_id')}
+        >
           <option value="">همه مسئولین پرونده</option>
           {activeNegotiators.map((n) => (
-            <option key={n.id} value={n.name}>
+            <option key={n.id} value={String(n.id)}>
               {n.name}
             </option>
           ))}

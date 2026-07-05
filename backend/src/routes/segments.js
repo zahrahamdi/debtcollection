@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { authorize } = require('../middleware/auth.middleware');
 const { toInterval, intervalsOverlap, validateCondition } = require('../db/segmentUtil');
 
 const CREDIT_TYPES = ['loan', 'bnpl'];
@@ -68,7 +69,7 @@ router.get('/', (req, res) => {
  * POST /api/segments
  * ایجاد سگمنت جدید با بررسی نام تکراری و همپوشانی (AC2).
  */
-router.post('/', (req, res) => {
+router.post('/', authorize('admin_panel', 'edit'), (req, res) => {
   try {
     const { title, credit_type, condition_type, cei_x, cei_y } = req.body || {};
     const cleanTitle = (title || '').trim();
@@ -109,7 +110,7 @@ router.post('/', (req, res) => {
  * PUT /api/segments/:id
  * ویرایش سگمنت (عنوان، شرط) با بررسی مجدد نام تکراری و همپوشانی.
  */
-router.put('/:id', (req, res) => {
+router.put('/:id', authorize('admin_panel', 'edit'), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM segments WHERE id = $id', { $id: id });
@@ -154,7 +155,7 @@ router.put('/:id', (req, res) => {
  * DELETE /api/segments/:id
  * حذف سگمنت — اگر پرونده فعال داشته باشد مجاز نیست (AC5).
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', authorize('admin_panel', 'edit'), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM segments WHERE id = $id', { $id: id });

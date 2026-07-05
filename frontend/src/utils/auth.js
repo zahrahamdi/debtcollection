@@ -76,21 +76,6 @@ export function logout() {
   window.location.href = '/login';
 }
 
-/** @deprecated use getCurrentUser() */
-export const currentUser = new Proxy(
-  {},
-  {
-    get(_t, prop) {
-      const u = getCurrentUser();
-      if (!u) return prop === 'name' ? '' : undefined;
-      if (prop === 'name') return getUserDisplayName(u);
-      if (prop === 'role') return u.roles?.includes('admin') ? 'admin' : u.roles?.[0];
-      if (prop === 'negotiatorId') return u.negotiator_id;
-      return u[prop];
-    },
-  }
-);
-
 export const PASSWORD_RULES = [
   { key: 'length', label: 'حداقل ۸ کاراکتر', test: (p) => p.length >= 8 },
   { key: 'upper', label: 'حداقل یک حرف بزرگ', test: (p) => /[A-Z]/.test(p) },

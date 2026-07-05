@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { authorize } = require('../middleware/auth.middleware');
 const { getActions, validateActions, replaceActions } = require('../db/strategyActions');
 
 const CREDIT_TYPES = ['loan', 'bnpl'];
@@ -110,7 +111,7 @@ router.get('/:id', (req, res) => {
 /**
  * POST /api/strategies
  */
-router.post('/', (req, res) => {
+router.post('/', authorize('strategies', 'create'), (req, res) => {
   try {
     const { title, credit_type, segment_id, created_by, actions } = req.body || {};
     const cleanTitle = (title || '').trim();
@@ -150,7 +151,7 @@ router.post('/', (req, res) => {
 /**
  * PUT /api/strategies/:id
  */
-router.put('/:id', (req, res) => {
+router.put('/:id', authorize('strategies', 'edit'), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM strategies WHERE id = $id', { $id: id });
@@ -193,7 +194,7 @@ router.put('/:id', (req, res) => {
  * DELETE /api/strategies/:id
  * حذف فقط اگر هیچ پرونده بازی وجود نداشته باشد (AC5).
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', authorize('strategies', 'delete'), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM strategies WHERE id = $id', { $id: id });

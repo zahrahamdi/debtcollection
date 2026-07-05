@@ -12,8 +12,9 @@ export async function fetchCases(filters = {}, page = 1) {
   const { data } = await client.get('/cases', { params })
   return {
     data: data?.data ?? [],
-    count: data?.count ?? 0,
+    total: data?.total ?? 0,
     page: data?.page ?? 1,
+    limit: data?.limit ?? 100,
     total_pages: data?.total_pages ?? 1,
   }
 }

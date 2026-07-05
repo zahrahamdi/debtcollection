@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { authorize } = require('../middleware/auth.middleware');
 const { getActorName } = require('../utils/requestUser');
 
 // کلیدهایی که باید عدد صحیح مثبت باشند (اعتبارسنجی سمت سرور)
@@ -57,7 +58,7 @@ router.get('/history', (req, res) => {
  * به‌روزرسانی یک یا چند تنظیم به همراه ثبت تاریخچه.
  * body: { changes: [{ key, value }], user_name }
  */
-router.put('/', (req, res) => {
+router.put('/', authorize('admin_panel', 'edit'), (req, res) => {
   try {
     const { changes } = req.body || {};
     const userName = getActorName(req);

@@ -44,14 +44,17 @@ npm run dev     # http://localhost:3000
 ```bash
 cd frontend
 npm install
+cp .env.example .env
 npm run dev     # http://localhost:5173
 ```
 
-فرانت‌اند به `http://localhost:3000/api` متصل است (`frontend/src/api/client.js`).
+فرانت‌اند از `VITE_API_URL` در `frontend/.env` استفاده می‌کند (پیش‌فرض: `http://localhost:3000/api`).
 
 ---
 
-## تنظیمات محیطی (`backend/.env`)
+## تنظیمات محیطی
+
+### Backend (`backend/.env`)
 
 ```env
 PORT=3000
@@ -59,6 +62,12 @@ JWT_SECRET=digipay-jwt-secret-2024   # اجباری در production
 KAVENEGAR_API_KEY=                   # برای ارسال واقعی پیامک
 KAVENEGAR_SENDER=                    # خط فرستنده کاوه‌نگار
 SMS_MOCK=true                        # true = بدون API واقعی
+```
+
+### Frontend (`frontend/.env`)
+
+```env
+VITE_API_URL=http://localhost:3000/api
 ```
 
 ---
@@ -85,9 +94,9 @@ debt-collection-mng-project/
 │   │   ├── server.js              # ورود: init DB + listen + scheduler
 │   │   ├── app.js                 # Express middleware + routes
 │   │   ├── db/                    # schema, database, seed, CEI, dateUtil
-│   │   ├── middleware/            # authenticate, authorize, requireAdmin
-│   │   ├── routes/                # REST API (+ auth.routes, users.routes)
-│   │   ├── services/              # strategy engine, import, auth, SMS
+│   │   ├── middleware/            # authenticate, authorize, requireAdmin, requireCallOutcomeAccess
+│   │   ├── routes/                # REST API (thin handlers)
+│   │   ├── services/              # cases, reports, strategy engine, import, auth, SMS
 │   │   └── utils/                 # requestUser (getActorName)
 │   ├── scripts/                   # ابزارهای نگهداری و دیباگ
 │   ├── database.sqlite            # دیتابیس محلی (در git نیست)
@@ -99,8 +108,8 @@ debt-collection-mng-project/
 │       │   ├── charts/            # Recharts
 │       │   ├── reports/           # FunnelFlowChart (React Flow)
 │       │   └── ProtectedRoute.jsx # guard مسیرها
-│       ├── api/                   # axios + auth interceptor
-│       └── utils/auth.js          # JWT, roles, permissions
+│       ├── api/                   # axios + auth interceptor (VITE_API_URL)
+│       └── utils/auth.js          # JWT, roles, hasPermission, logout
 ├── PRD-DigiPay.md
 ├── PROJECT-STATUS.md
 ├── TECHNICAL.md
@@ -111,7 +120,7 @@ debt-collection-mng-project/
 
 ## قابلیت‌های اصلی
 
-- **پرونده‌ها:** لیست، فیلتر (۱۵ وضعیت)، جزئیات، **`last_action` از `case_actions`**، تخصیص مذاکره‌کننده، ثبت خروجی تماس
+- **پرونده‌ها:** لیست با **pagination سمت سرور** (SQL `LIMIT`/`OFFSET`)، فیلتر SQL، جزئیات، تخصیص، ثبت خروجی تماس
 - **استراتژی:** تعریف اقدام‌های ترتیبی (پیامک / اتوکال / مذاکره) با `wait_next_minutes`، `wait_repeat_minutes`، `max_repeat` و **`repeat_on_results`** (تکرار شرطی)
 - **موتور استراتژی:** اجرای خودکار هر ۱ دقیقه، تکرار فقط برای نتایج انتخاب‌شده، عبور به اقدام بعدی، **شکست استراتژی** و CEI boost
 - **عملیات گروهی:** آپلود Excel پرونده، پرداخت، تخصیص / تخصیص مجدد
@@ -129,10 +138,10 @@ debt-collection-mng-project/
 |------|--------|
 | `GET /api/health` | سلامت سرور |
 | `POST /api/auth/login` | ورود — JWT |
-| `POST /api/auth/register` | ثبت‌نام |
+| `POST /api/auth/register` | ثبت‌نام — JWT + `has_role: false` → `/waiting` |
 | `GET /api/auth/me` | کاربر جاری |
-| `GET /api/users` | لیست کاربران (admin) |
-| `GET /api/cases` | لیست پرونده‌ها |
+| `GET /api/users` | لیست کاربران (`authorize('admin_panel','view')`) |
+| `GET /api/cases` | لیست paginated — `page`, `limit`, فیلتر SQL |
 | `GET /api/cases/:id` | جزئیات پرونده |
 | `POST /api/bulk/upload-cases` | آپلود Excel پرونده |
 | `POST /api/bulk/upload-payments` | آپلود Excel پرداخت |
@@ -197,17 +206,19 @@ debt-collection-mng-project/
 
 ## احراز هویت و دسترسی
 
-**Login، Register، JWT و جداول `users` / `roles` / `permissions` پیاده شده‌اند.**
+**Login، Register، JWT، RBAC و `authorize()` روی routeهای حساس پیاده شده‌اند.**
 
 | لایه | وضعیت |
 |------|--------|
-| Frontend | `/login`, `/register`, `/forgot-password`, `/waiting` · `ProtectedRoute` · interceptor توکن |
-| Backend | `authenticate` روی `/api/*` (به‌جز auth/health) · `requireAdmin` روی admin routes |
+| Frontend | `/login`, `/register`, `/forgot-password`, `/waiting` · `ProtectedRoute` · `hasPermission()` در Cases/Sidebar/RowActions |
+| Backend | `authenticate` روی `/api/*` · `authorize(resource, action)` روی bulk/reports/settings/users/… · `requireCallOutcomeAccess` روی call-outcome |
 | Audit | `user_name` از `req.user` — دیگر از body فرانت نیست |
 
 **ورود admin (بعد از `npm run seed`):** `zahra.hamdi` / `Admin@1234` (سوپر ادمین)
 
-**بدهی فنی:** RBAC granular (`authorize`) هنوز روی همه routeها enforce نشده · `hasPermission()` در UI کم‌استفاده است.
+**ثبت‌نام:** JWT با `has_role: false` برمی‌گردد → فرانت به `/waiting` ریدایرکت می‌کند.
+
+**باقی‌مانده:** forgot-password بدون OTP · کاربر بدون نقش هنوز به APIهای عمومی دسترسی دارد (تا enforce کامل register).
 
 جزئیات: [TECHNICAL.md §۱۰](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی) · [PRD §۳.۴](./PRD-DigiPay.md#۳۴-پیاده‌سازی-دسترسی-در-نسخه-دمو)
 
@@ -215,7 +226,7 @@ debt-collection-mng-project/
 
 ## تست و کیفیت (برنامه)
 
-Unit / Integration / E2E **هنوز پیاده نشده** — مرجع: [TECHNICAL.md §۱۱](./TECHNICAL.md#۱۱-تست-refactor-و-بدهی-فنی).
+Unit / Integration / E2E **هنوز پیاده نشده** — refactor سرویس (`cases.service`, `reports.service`) و RBAC انجام شده؛ مرجع: [TECHNICAL.md §۱۱](./TECHNICAL.md#۱۱-تست-refactor-و-بدهی-فنی).
 
 ---
 

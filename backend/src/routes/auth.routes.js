@@ -54,9 +54,11 @@ router.post('/register', (req, res) => {
       { $fn: fn, $ln: ln, $un: un, $em: em, $ph: hashPassword(password) }
     );
 
+    const token = signToken(lastInsertRowid, { has_role: false });
+
     res.status(201).json({
       message: 'ثبت‌نام موفق. منتظر تخصیص نقش از سمت ادمین باشید.',
-      data: { id: lastInsertRowid },
+      data: { id: lastInsertRowid, token, has_role: false },
     });
   } catch (err) {
     console.error('[POST /api/auth/register]', err);
@@ -89,6 +91,7 @@ router.post('/login', (req, res) => {
     res.json({
       data: {
         token,
+        has_role: user.roles.length > 0,
         user: {
           id: user.id,
           first_name: user.first_name,

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { MoreVertical, History, UserPlus, Repeat, Scale } from 'lucide-react'
-import { isAdmin } from '../../utils/auth'
+import { hasPermission } from '../../utils/auth'
 
 // منوی عملیات هر ردیف (بخش ۳.۱ PRD)
 export default function RowActionsMenu({ row, onViewHistory, onAssign, onReassign }) {
@@ -15,7 +15,7 @@ export default function RowActionsMenu({ row, onViewHistory, onAssign, onReassig
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  const admin = isAdmin()
+  const canManageAssign = hasPermission('cases', 'reassign')
   const canAssign = row.case_status === 'pending_negotiator_assignment'
   const canReassign = Boolean(row.assigned_negotiator_id)
 
@@ -30,14 +30,14 @@ export default function RowActionsMenu({ row, onViewHistory, onAssign, onReassig
       label: 'تخصیص به مذاکره‌کننده',
       icon: UserPlus,
       onClick: () => onAssign?.(row),
-      show: admin,
+      show: canManageAssign,
       disabled: !canAssign,
     },
     {
       label: 'تخصیص مجدد',
       icon: Repeat,
       onClick: () => onReassign?.(row),
-      show: admin,
+      show: canManageAssign,
       disabled: !canReassign,
     },
     {

@@ -58,15 +58,17 @@ backend/src/
 ├── server.js                 # initDatabase → createApp → listen → startScheduler
 ├── app.js                    # mount routes + authenticate / requireAdmin
 ├── middleware/
-│   └── auth.middleware.js    # authenticate, authorize, requireAdmin
+│   └── auth.middleware.js    # authenticate, authorize, requireAdmin, requireCallOutcomeAccess
 ├── routes/
 │   ├── auth.routes.js        # register, login, forgot-password, me
-│   ├── users.routes.js       # مدیریت ادمین‌ها (admin)
-│   ├── cases.js              # ⚠ fat route (~850 خط)
-│   ├── reports.js            # ⚠ fat route (~1400 خط)
+│   ├── users.routes.js       # مدیریت ادمین‌ها
+│   ├── cases.js              # thin — delegate به cases.service
+│   ├── reports.js            # thin — delegate به reports.service
 │   └── …                     # debtors, bulk, strategies, …
 ├── services/
-│   ├── auth.service.js       # JWT, bcrypt, RBAC helpers ★
+│   ├── auth.service.js       # JWT, bcrypt, RBAC helpers
+│   ├── cases.service.js      # listCases, getCaseById, assignCase, submitCallOutcome ★
+│   ├── reports.service.js    # getCasesReport, getFunnelReport, … ★
 │   ├── strategy-engine.service.js
 │   ├── case-import.service.js
 │   ├── payment-import.service.js
@@ -89,19 +91,32 @@ backend/src/
 |--------|------------|
 | `/api/health`, `/api/auth` | بدون authenticate |
 | `/api/cases`, `/api/debtors`, `/api/negotiators`, `/api/gsheet` | `authenticate` |
-| `/api/settings`, `/api/cei-formulas`, `/api/segments`, `/api/strategies`, `/api/ab-tests`, `/api/bulk`, `/api/reports`, `/api/users` | `authenticate` + `requireAdmin` |
-| `POST/PUT /api/negotiators` | `requireAdmin` داخل router |
+| `/api/settings`, `/api/segments`, `/api/strategies` | `authenticate` — mutate routes: `authorize()` داخل router |
+| `/api/cei-formulas`, `/api/ab-tests` | `authenticate` + `requireAdmin` |
+| `/api/bulk`, `/api/reports`, `/api/users` | `authenticate` — `authorize()` داخل router |
 
-**نکته:** middleware `authorize(resource, action)` تعریف شده ولی **هنوز روی routeها اعمال نشده** — فقط admin/non-admin.
+**`authorize(resource, action)`** روی routeهای حساس اعمال شده (admin از role یا permission عبور می‌کند).
 
-### ۲.۵ لایه‌های ناقص (بدهی معماری)
+| Route | Guard |
+|-------|--------|
+| `POST /cases/:id/assign` | `requireAdmin` |
+| `POST /cases/:id/call-outcome` | `authorize('call_outcome','create')` + `requireCallOutcomeAccess` |
+| `POST/PUT /negotiators` | `authorize('negotiators', 'create/edit')` |
+| `POST/PUT/DELETE /strategies` | `authorize('strategies', …)` |
+| `POST/PUT/DELETE /segments` | `authorize('admin_panel', 'edit')` |
+| همه `/bulk/*` | `authorize('bulk_operations', 'view')` |
+| همه `/reports/*` | `authorize('reports', 'view')` |
+| `PUT /settings` | `authorize('admin_panel', 'edit')` |
+| همه `/users/*` | `authorize('admin_panel', 'view')` |
 
-| ماژول | مشکل | refactor پیشنهادی |
-|--------|------|-------------------|
-| `routes/cases.js` | منطق assign/call-outcome در route | `services/cases.service.js` |
-| `routes/reports.js` | SQL و aggregation در route | `services/reports.service.js` |
-| Error handling | بدون middleware مرکزی | `middleware/errorHandler.js` |
-| Transactions | assign/call-outcome چند `run()` بدون transaction | wrap در service |
+### ۲.۵ لایه service (انجام‌شده)
+
+| سرویس | توابع اصلی |
+|--------|------------|
+| `cases.service.js` | `listCases`, `getCaseById`, `assignCase`, `submitCallOutcome` |
+| `reports.service.js` | `getCasesReport`, `getFunnelReport`, `getStrategiesPerformance`, `getStrategiesCost`, `getNegotiatorsReport` |
+
+**بدهی باقی‌مانده:** error handler مرکزی · transactions در assign/call-outcome
 
 ---
 
@@ -118,8 +133,10 @@ backend/src/
 
 | سرویس | مسئولیت |
 |--------|---------|
-| `case-import.service.js` | پردازش هر ردیف Excel: ایجاد/آپدیت پرونده، CEI، سگمنت، استراتژی، منطق ۵.۴ PRD (Skip اقدام، respite) |
-| `strategy-engine.service.js` | اجرای اقدام‌های خودکار، تکرار شرطی (`repeat_on_results`)، عبور به اقدام بعدی، شکست استراتژی |
+| `case-import.service.js` | پردازش هر ردیف Excel: ایجاد/آپدیت پرونده، CEI، سگمنت، استراتژی |
+| `cases.service.js` | لیست paginated، جزئیات، تخصیص، ثبت خروجی تماس (+ validation paid/burned، anti double-submit) |
+| `reports.service.js` | aggregation گزارشات — KPI، funnel، عملکرد، هزینه، مذاکره‌کنندگان |
+| `strategy-engine.service.js` | اجرای اقدام‌های خودکار، تکرار شرطی، شکست استراتژی |
 | `payment-import.service.js` | ثبت پرداخت جزئی/کامل، به‌روزرسانی مالی، resume استراتژی |
 | `sms.service.js` | `sendSms` (Kavenegar یا `SMS_MOCK`), placeholder `{نام_کاربر}`, `{مبلغ_مطالبات}`, `{لینک_پرداخت}`. **نتیجه delivery** در موتور استراتژی جداگانه Mock می‌شود. |
 
@@ -181,7 +198,16 @@ frontend/src/
 
 هر تب فیلتر مستقل دارد (بازه شمسی، نوع اعتبار، …). دسترسی: `isAdmin()` — در غیر این صورت `<Navigate to="/cases" />`.
 
-**اتصال API:** `frontend/src/api/client.js` → `baseURL: http://localhost:3000/api`
+**اتصال API:** `frontend/src/api/client.js` → `baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api'`  
+**Env:** `frontend/.env` → `VITE_API_URL=http://localhost:3000/api`
+
+**کنترل دسترسی UI (`hasPermission`):**
+
+| محل | شرط |
+|-----|-----|
+| `CaseDetailSidebar` | `call_outcome:create` + admin یا مذاکره‌کننده مسئول |
+| `RowActionsMenu` | `cases:reassign` برای تخصیص/تخصیص مجدد |
+| `Cases.jsx` | `google_sheet_sync:execute` برای دکمه‌های GSheet |
 
 **UI سازنده استراتژی:** `StrategyActionsBuilder.jsx` — dropdown چندانتخابی (`RepeatResultsMultiSelect`) برای `repeat_on_results`؛ گزینه‌ها per `action_type` از `REPEAT_RESULTS_BY_TYPE`.
 
@@ -320,7 +346,11 @@ stateDiagram-v2
 ### ۵.۲ ثبت خروجی تماس مذاکره‌کننده
 
 **Route:** `POST /api/cases/:id/call-outcome`  
-**File:** `routes/cases.js` · **UI:** `CallOutcomeModal.jsx`
+**Service:** `cases.service.js` → `submitCallOutcome` · **UI:** `CallOutcomeModal.jsx`
+
+**رد در ابتدا:**
+- `case_status` برابر `paid` یا `burned` → 400
+- خروجی تماس `negotiator_call` در ۱۰ ثانیه گذشته → 400 (جلوگیری double submit)
 
 **اعتبارسنجی `call_duration`:**
 
@@ -377,8 +407,8 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 | Method | Path | Auth | Body | توضیح |
 |--------|------|------|------|--------|
-| POST | `/register` | — | `first_name`, `last_name`, `username`, `email`, `password` | ثبت‌نام بدون نقش |
-| POST | `/login` | — | `username`, `password` | JWT 8h + user + roles + permissions |
+| POST | `/register` | — | `first_name`, … | JWT + `{ has_role: false }` — فرانت → `/waiting` |
+| POST | `/login` | — | `username`, `password` | JWT 8h + `has_role` + user + roles + permissions |
 | POST | `/forgot-password` | — | `email`, `new_password`, `confirm_password` | تغییر رمز (دمو — بدون OTP) |
 | GET | `/me` | Bearer | — | کاربر جاری |
 | POST | `/logout` | — | — | stateless — client token را پاک می‌کند |
@@ -393,14 +423,14 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 ### Cases — `/cases`
 
-| Method | Path | Query / Body | توضیح |
-|--------|------|--------------|--------|
-| GET | `/` | … | لیست paginated — `last_action` از `buildLastActionMap` (نه فیلد خام DB) |
-| GET | `/:id` | — | جزئیات + actions + … — `last_action` resolve شده |
-| GET | `/:id/history` | `operation`, `user_name`, `from_date`, `to_date` | Audit Trail پرونده |
-| GET | `/:id/installments` | — | اقساط پرونده |
-| POST | `/:id/assign` | `{ negotiator_id }` | تخصیص / تخصیص مجدد — `user_name` از token |
-| POST | `/:id/call-outcome` | `{ call_status, call_duration?, … }` | ثبت خروجی تماس — `call_duration` اجباری فقط برای «پاسخگو بود» / «ناسزا گفت»؛ برای «پاسخگو نبود» → ۰ و هزینه ۰ |
+| Method | Path | Auth | Query / Body | توضیح |
+|--------|------|------|--------------|--------|
+| GET | `/` | Bearer | `debtor_name`, `national_code`, `credit_id`, `credit_type`, `case_status`, `action_status`, `assigned_negotiator_id`, `page` (۱), `limit` (۱۰۰) | لیست paginated — فیلتر SQL · پاسخ: `{ data, total, page, limit, total_pages }` |
+| GET | `/:id` | Bearer | — | جزئیات — `cases.service.getCaseById` |
+| GET | `/:id/history` | Bearer | `operation`, … | Audit Trail |
+| GET | `/:id/installments` | Bearer | — | اقساط پرونده (router جدا) |
+| POST | `/:id/assign` | admin | `{ negotiator_id }` | `requireAdmin` |
+| POST | `/:id/call-outcome` | negotiator/admin | `{ call_status, … }` | `authorize` + `requireCallOutcomeAccess` |
 
 ### Debtors — `/debtors`
 
@@ -590,6 +620,12 @@ cost, avg_call_duration
 | `KAVENEGAR_SENDER` | — | خط فرستنده |
 | `SMS_MOCK` | — | `true` = بدون API واقعی |
 
+### Frontend `.env`
+
+| متغیر | پیش‌فرض | توضیح |
+|--------|---------|--------|
+| `VITE_API_URL` | `http://localhost:3000/api` | base URL برای axios (`client.js`) |
+
 ### اسکریپت‌های `backend/scripts/`
 
 | فایل | کار |
@@ -631,11 +667,12 @@ cost, avg_call_duration
 | قابلیت | وضعیت |
 |--------|--------|
 | Login / Register / Forgot password | ✅ |
-| JWT (8h) + bcrypt | ✅ |
+| JWT (8h) + bcrypt + `has_role` در register/login | ✅ |
 | جداول `users`, `roles`, `permissions` | ✅ |
 | `authenticate` middleware | ✅ |
-| `requireAdmin` روی admin routes | ✅ |
-| `authorize(resource, action)` | ⚠️ تعریف شده، **اعمال نشده** |
+| `authorize(resource, action)` روی routeهای حساس | ✅ |
+| `requireCallOutcomeAccess` (مالکیت پرونده negotiator) | ✅ |
+| `hasPermission()` در UI (Cases, Sidebar, RowActions) | ✅ |
 | SSO production | ❌ برنامه آینده |
 
 ### ۱۰.۲ Backend
@@ -643,40 +680,35 @@ cost, avg_call_duration
 **فایل‌ها:** `services/auth.service.js` · `middleware/auth.middleware.js` · `routes/auth.routes.js` · `routes/users.routes.js`
 
 ```javascript
-// loadUserAuthPayload → roles[], permissions[], negotiator_id
-signToken(userId)  // JWT 8h
-getActorName(req)   // first_name + last_name در history/settings/bulk
+signToken(userId, { has_role: false })  // register
+loadUserAuthPayload(userId)             // roles[], permissions[], negotiator_id
+requireCallOutcomeAccess                // admin همه · negotiator فقط assigned
 ```
 
-**Seed admin:** `zahra.hamdi` / `Admin@1234` · `is_super_admin=1` · لینک به negotiator زهرا حمیدی
-
-**Permissions در seed:** admin → همه؛ negotiator → subset (cases:view/assign, debtors, call_outcome, …)
+**Seed admin:** `zahra.hamdi` / `Admin@1234`
 
 ### ۱۰.۳ Frontend
 
 **صفحات:** `Login`, `Register`, `ForgotPassword`, `WaitingForRole`  
 **Guard:** `ProtectedRoute` — token → role → adminOnly  
-**Utils:** `utils/auth.js` — `getToken`, `isAdmin`, `hasPermission`, `logout`  
-**API:** `api/auth.js`, `api/client.js` (Bearer + 401 redirect)
+**Utils:** `getToken`, `isAdmin`, `hasPermission`, `logout` — **`currentUser` proxy حذف شده**  
+**Register:** token + `has_role === false` → redirect `/waiting`
 
-**کنترل UI:** عمدتاً `isAdmin()` — `hasPermission()` هنوز استفاده نشده.
-
-### ۱۰.۴ بدهی امنیتی (باید قبل از production بسته شود)
+### ۱۰.۴ بدهی امنیتی باقی‌مانده
 
 | # | موضوع | شدت |
 |---|--------|-----|
-| 1 | `authorize()` روی assign/call-outcome/debtors enforce نشده | CRITICAL |
-| 2 | call-outcome: backend مالکیت پرونده negotiator را چک نمی‌کند | CRITICAL |
-| 3 | forgot-password بدون OTP/token | HIGH |
-| 4 | register باز — کاربر بدون نقش به API دسترسی دارد | HIGH |
-| 5 | JWT_SECRET fallback در کد | MEDIUM |
+| 1 | forgot-password بدون OTP/token | HIGH |
+| 2 | register باز — کاربر بدون نقش به APIهای authenticate‌شده دسترسی دارد | HIGH |
+| 3 | JWT_SECRET fallback در کد | MEDIUM |
+| 4 | `authorize` روی همه routeهای read-only (debtors GET و …) اعمال نشده | LOW |
 
 ### ۱۰.۵ نقش‌ها (PRD §۳.۳)
 
 | نقش | دسترسی خلاصه |
 |-----|--------------|
 | admin | همه صفحات admin + bulk + گزارشات |
-| negotiator | بدهکاران، پرونده‌ها، اقساط، تاریخچه؛ تماس **فقط** پرونده خود (UI ✅ / API ⚠️) |
+| negotiator | بدهکاران، پرونده‌ها، اقساط، تاریخچه؛ تماس **فقط** پرونده خود (UI ✅ / API ✅) |
 
 جدول کامل: [PRD §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
 
@@ -695,30 +727,30 @@ getActorName(req)   // first_name + last_name در history/settings/bulk
 
 `backend/package.json`: `"test": "Error: no test specified"`
 
-### ۱۱.۲ پلن پیشنهادی (ترکیبی refactor + test)
+### ۱۱.۲ پلن پیشنهادی (به‌روز)
 
-| فاز | مدت | کار | تست همراه |
-|-----|-----|-----|-----------|
-| 0 | ۳ روز | Vitest setup، schema installments، disable cron در test | ~20 unit |
-| 1 | ۱ هفته | enforce RBAC، call-outcome ownership | ~25 integration |
-| 2 | ۲ هفته | `cases.service`, `reports.service` | unit + int per PR |
-| 3 | ۱ هفته | GSheet decision، AB test UI، legacy negotiator users | E2E smoke |
-| 4 | ۱ هفته | Playwright regression + CI | 8–10 spec |
+| فاز | وضعیت | کار |
+|-----|--------|-----|
+| 0 | ⏳ | Vitest setup، schema installments، disable cron در test |
+| 1 | 🔶 جزئی | RBAC enforce ✅ · auth integration tests ❌ |
+| 2 | 🔶 جزئی | `cases.service` ✅ · `reports.service` ✅ · error handler ❌ |
+| 3 | ⏳ | GSheet، AB test UI، legacy negotiators |
+| 4 | ⏳ | Playwright E2E + CI |
 
 ### ۱۱.۳ بدهی فنی اولویت‌دار
 
 | ID | موضوع | شدت |
 |----|--------|-----|
-| R1 | Fat routes (`cases`, `reports`) | HIGH |
-| R2 | RBAC dead code (`authorize` unused) | CRITICAL |
+| R1 | ~~Fat routes (`cases`, `reports`)~~ | ✅ انجام شد |
+| R2 | ~~RBAC dead code (`authorize` unused)~~ | ✅ انجام شد |
 | R3 | Schema drift installments | HIGH |
 | R4 | Scheduler همیشه on — DB non-deterministic | HIGH |
 | R5 | No global error handler / transactions | MEDIUM |
 | R6 | GSheet sync UI بدون backend | HIGH |
 | R7 | AB test: create only، no list/delete UI | MEDIUM |
 | R8 | Legacy negotiators بدون `user_id` | MEDIUM |
-| R9 | `GET /cases` in-memory pagination | MEDIUM |
-| R10 | PRD §۳.۴ outdated | LOW |
+| R9 | ~~`GET /cases` in-memory pagination~~ | ✅ SQL pagination |
+| R10 | Automated tests (unit/integration/e2e) | HIGH |
 
 ### ۱۱.۴ ابزارهای پیشنهادی
 
@@ -735,4 +767,4 @@ getActorName(req)   // first_name + last_name در history/settings/bulk
 
 ---
 
-*آخرین به‌روزرسانی: احراز هویت JWT/RBAC · مدیریت ادمین‌ها · audit معماری و پلن تست*
+*آخرین به‌روزرسانی: RBAC enforce · service layer (cases/reports) · pagination SQL · hasPermission UI · VITE_API_URL*

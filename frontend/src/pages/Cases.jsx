@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { FileSpreadsheet, RefreshCw, ChevronRight, ChevronLeft } from 'lucide-react'
 import { fetchCases } from '../api/cases'
 import { fetchNegotiators } from '../api/negotiators'
-import { isAdmin } from '../utils/auth'
+import { hasPermission } from '../utils/auth'
 import { toFaDigits } from '../utils/format'
 import CasesFilters from '../components/table/CasesFilters'
 import CasesTable from '../components/table/CasesTable'
@@ -19,7 +19,7 @@ const emptyFilters = {
   credit_type: '',
   case_status: '',
   action_status: '',
-  negotiator_name: '',
+  assigned_negotiator_id: '',
 }
 
 export default function Cases() {
@@ -31,9 +31,10 @@ export default function Cases() {
   const [filters, setFilters] = useState({
     ...emptyFilters,
     national_code: searchParams.get('national_code') || '',
-    negotiator_name: searchParams.get('negotiator') || '',
+    assigned_negotiator_id: searchParams.get('negotiator_id') || '',
   })
   const [page, setPage] = useState(1)
+  const [limit] = useState(100)
   const [totalPages, setTotalPages] = useState(1)
   const [total, setTotal] = useState(0)
   const [selectedId, setSelectedId] = useState(null)
@@ -46,9 +47,9 @@ export default function Cases() {
     (currentPage = page) => {
       setLoading(true)
       fetchCases(filters, currentPage)
-        .then(({ data, count, total_pages }) => {
+        .then(({ data, total: totalCount, total_pages }) => {
           setRows(data)
-          setTotal(count)
+          setTotal(totalCount)
           setTotalPages(total_pages)
           setError(null)
         })
@@ -65,14 +66,14 @@ export default function Cases() {
     const initialFilters = {
       ...emptyFilters,
       national_code: searchParams.get('national_code') || '',
-      negotiator_name: searchParams.get('negotiator') || '',
+      assigned_negotiator_id: searchParams.get('negotiator_id') || '',
     }
     setFilters(initialFilters)
     setLoading(true)
     fetchCases(initialFilters, 1)
-      .then(({ data, count, total_pages }) => {
+      .then(({ data, total: totalCount, total_pages }) => {
         setRows(data)
-        setTotal(count)
+        setTotal(totalCount)
         setTotalPages(total_pages)
         setError(null)
       })
@@ -91,9 +92,9 @@ export default function Cases() {
     setPage(1)
     setLoading(true)
     fetchCases(filters, 1)
-      .then(({ data, count, total_pages }) => {
+      .then(({ data, total: totalCount, total_pages }) => {
         setRows(data)
-        setTotal(count)
+        setTotal(totalCount)
         setTotalPages(total_pages)
         setError(null)
       })
@@ -106,9 +107,9 @@ export default function Cases() {
     setPage(newPage)
     setLoading(true)
     fetchCases(filters, newPage)
-      .then(({ data, count, total_pages }) => {
+      .then(({ data, total: totalCount, total_pages }) => {
         setRows(data)
-        setTotal(count)
+        setTotal(totalCount)
         setTotalPages(total_pages)
       })
       .catch(() => setError('خطا در دریافت پرونده‌ها'))
@@ -121,9 +122,9 @@ export default function Cases() {
     setPage(1)
     setLoading(true)
     fetchCases(reset, 1)
-      .then(({ data, count, total_pages }) => {
+      .then(({ data, total: totalCount, total_pages }) => {
         setRows(data)
-        setTotal(count)
+        setTotal(totalCount)
         setTotalPages(total_pages)
         setError(null)
       })
@@ -135,6 +136,10 @@ export default function Cases() {
     toast(`سینک ${kind} از Google Sheet در این نسخه دمو فعال نیست.`, { icon: '🔗' })
   }
 
+  const canSyncGSheet = hasPermission('google_sheet_sync', 'execute')
+  const rangeStart = total === 0 ? 0 : (page - 1) * limit + 1
+  const rangeEnd = Math.min(page * limit, total)
+
   return (
     <div className="space-y-4">
       {/* نوار بالا */}
@@ -142,11 +147,13 @@ export default function Cases() {
         <div>
           <h2 className="text-xl font-bold text-slate-800">لیست پرونده‌ها</h2>
           <p className="mt-1 text-sm text-slate-400">
-            مجموع نتایج: {toFaDigits(total)} پرونده
+            {total === 0
+              ? 'هیچ پرونده‌ای یافت نشد'
+              : `نمایش ${toFaDigits(rangeStart)} تا ${toFaDigits(rangeEnd)} از ${toFaDigits(total)} پرونده`}
           </p>
         </div>
 
-        {isAdmin() && (
+        {canSyncGSheet && (
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -196,7 +203,7 @@ export default function Cases() {
 
       {/* pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 py-2">
+        <div className="flex flex-col items-center gap-2 py-2 sm:flex-row sm:justify-center">
           <button
             type="button"
             onClick={() => handlePageChange(page - 1)}

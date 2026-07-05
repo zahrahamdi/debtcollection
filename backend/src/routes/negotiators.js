@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
-const { requireAdmin } = require('../middleware/auth.middleware');
+const { authorize } = require('../middleware/auth.middleware');
 const { assignRoleToUser } = require('../services/auth.service');
 
 const COOPERATION_TYPES = ['internal', 'outsourced'];
@@ -63,7 +63,7 @@ router.get('/', (req, res) => {
   }
 });
 
-router.post('/', requireAdmin, (req, res) => {
+router.post('/', authorize('negotiators', 'create'), (req, res) => {
   try {
     const { user_id, capacity, cooperation_type, hourly_wage } = req.body || {};
     const uid = Number(user_id);
@@ -109,7 +109,7 @@ router.post('/', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/:id', requireAdmin, (req, res) => {
+router.put('/:id', authorize('negotiators', 'edit'), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM negotiators WHERE id = $id', { $id: id });

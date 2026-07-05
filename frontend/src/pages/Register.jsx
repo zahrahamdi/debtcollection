@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Check, X } from 'lucide-react'
 import { register } from '../api/auth'
-import { PASSWORD_RULES } from '../utils/auth'
+import { setToken, PASSWORD_RULES } from '../utils/auth'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 export default function Register() {
+  const navigate = useNavigate()
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -30,13 +31,20 @@ export default function Register() {
     }
     setLoading(true)
     try {
-      await register({
+      const result = await register({
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         username: form.username.trim(),
         email: form.email.trim(),
         password: form.password,
       })
+      if (result?.data?.token) {
+        setToken(result.data.token)
+      }
+      if (result?.data?.has_role === false) {
+        navigate('/waiting', { replace: true })
+        return
+      }
       setSuccess(true)
     } catch (err) {
       toast.error(err?.response?.data?.error ?? 'خطا در ثبت‌نام')
