@@ -114,6 +114,50 @@ function nextAllowedStartDatetime(allowedFrom) {
   return formatDatetime(d);
 }
 
+function setTimeFromHHMM(date, allowedFrom) {
+  const d = new Date(date);
+  const parts = String(allowedFrom || '09:00').split(':');
+  d.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
+  return d;
+}
+
+/**
+ * هم‌تراز کردن datetime با بازه مجاز allowed_from..allowed_to:
+ * - در بازه → همان لحظه
+ * - قبل از allowed_from → همان روز ساعت allowed_from
+ * - بعد از allowed_to → فردا ساعت allowed_from
+ */
+function alignDatetimeToAllowedWindow(dt, allowedFrom, allowedTo) {
+  const d = dt instanceof Date ? new Date(dt.getTime()) : new Date(dt);
+  const mins = d.getHours() * 60 + d.getMinutes();
+  const from = parseHHMM(allowedFrom || '09:00');
+  const to = parseHHMM(allowedTo || '18:00');
+
+  if (from <= to) {
+    if (mins >= from && mins <= to) return formatDatetime(d);
+    if (mins < from) return formatDatetime(setTimeFromHHMM(d, allowedFrom));
+    const next = new Date(d);
+    next.setDate(next.getDate() + 1);
+    return formatDatetime(setTimeFromHHMM(next, allowedFrom));
+  }
+
+  if (mins >= from || mins <= to) return formatDatetime(d);
+  if (mins > to && mins < from) return formatDatetime(setTimeFromHHMM(d, allowedFrom));
+  const next = new Date(d);
+  next.setDate(next.getDate() + 1);
+  return formatDatetime(setTimeFromHHMM(next, allowedFrom));
+}
+
+/** next_action_date اولیه یا از «الان» بر اساس بازه مجاز اولین اکشن */
+function computeNextActionDateFromWindow(allowedFrom, allowedTo, baseDate) {
+  const base = baseDate
+    ? baseDate instanceof Date
+      ? baseDate
+      : new Date(baseDate)
+    : new Date();
+  return alignDatetimeToAllowedWindow(base, allowedFrom, allowedTo);
+}
+
 function startOfLocalDay(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
@@ -234,23 +278,15 @@ function isDatetimeWithinAllowedWindow(dt, allowedFrom, allowedTo) {
 }
 
 /**
- * زمان اقدام بعدی: now + wait_minutes، سپس بررسی بازه مجاز اکشن بعدی.
- * اگر خارج از بازه بود → روز بعد candidate در ساعت allowed_from.
+ * زمان اقدام بعدی: now + wait_minutes، سپس هم‌تراز با بازه مجاز اکشن بعدی.
  */
 function computeNextActionDate(waitMinutes, nextAction) {
   const candidate = new Date(Date.now() + Number(waitMinutes || 0) * 60000);
-  const allowedFrom = nextAction?.allowed_from || '09:00';
-  const allowedTo = nextAction?.allowed_to || '18:00';
-
-  if (isDatetimeWithinAllowedWindow(candidate, allowedFrom, allowedTo)) {
-    return formatDatetime(candidate);
-  }
-
-  const nextDay = new Date(candidate);
-  nextDay.setDate(nextDay.getDate() + 1);
-  const parts = String(allowedFrom).split(':');
-  nextDay.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
-  return formatDatetime(nextDay);
+  return alignDatetimeToAllowedWindow(
+    candidate,
+    nextAction?.allowed_from || '09:00',
+    nextAction?.allowed_to || '18:00'
+  );
 }
 
 function jalaliDateToDatetime(jalaliStr) {
@@ -286,6 +322,57 @@ function isTimeWithinAllowedWindow(timeStr, allowedFrom, allowedTo) {
   return mins >= from || mins <= to;
 }
 
+/** parse YYYY/MM/DD یا YYYY/MM/DD HH:mm جلالی → datetime گرگوری local */
+function parseJalaliPromisedDatetime(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  if (!m) return null;
+  const [, jy, jmo, jd, h, mi] = m;
+  const time = h !== undefined ? `${h}:${mi}` : '23:59';
+  return jalaliDateTimeToDatetime(`${jy}/${jmo}/${jd}`, time);
+}
+
+function isJalaliDatetimeInPast(jalaliDate, jalaliTime) {
+  const iso = jalaliDateTimeToDatetime(jalaliDate, jalaliTime);
+  if (!iso) return true;
+  const dt = parseActionDatetime(iso);
+  if (!dt) return true;
+  return Date.now() > dt.getTime();
+}
+
+function isJalaliPromisedOverdue(promisedDatetime) {
+  const iso = parseJalaliPromisedDatetime(promisedDatetime);
+  if (!iso) return false;
+  const dt = parseActionDatetime(iso);
+  if (!dt) return false;
+  return Date.now() > dt.getTime();
+}
+
+/** نرمال‌سازی datetime تعهد: YYYY/MM/DD HH:mm */
+function normalizePromisedDatetime({ promised_datetime, promised_date, promised_time }) {
+  const raw =
+    promised_datetime ||
+    (promised_date && promised_time ? `${promised_date} ${promised_time}` : null);
+  if (!raw) return null;
+  const m = String(raw)
+    .trim()
+    .match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m;
+  return `${y}/${pad2(mo)}/${pad2(d)} ${pad2(h)}:${pad2(mi)}`;
+}
+
+function promisedDateFromDatetime(promisedDatetime) {
+  if (!promisedDatetime) return null;
+  return String(promisedDatetime).trim().split(/\s+/)[0] || null;
+}
+
+function promisedTimeFromDatetime(promisedDatetime) {
+  if (!promisedDatetime) return null;
+  return String(promisedDatetime).trim().split(/\s+/)[1] || null;
+}
+
 module.exports = {
   parseJalali,
   parseActionDatetime,
@@ -307,6 +394,14 @@ module.exports = {
   isDatetimeWithinAllowedWindow,
   isTimeWithinAllowedWindow,
   jalaliDateTimeToDatetime,
+  parseJalaliPromisedDatetime,
+  isJalaliDatetimeInPast,
+  isJalaliPromisedOverdue,
+  normalizePromisedDatetime,
+  promisedDateFromDatetime,
+  promisedTimeFromDatetime,
   computeNextActionDate,
+  computeNextActionDateFromWindow,
+  alignDatetimeToAllowedWindow,
   currentMinutesOfDay,
 };

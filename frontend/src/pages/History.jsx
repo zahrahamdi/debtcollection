@@ -5,8 +5,8 @@ import Modal from '../components/modal/Modal'
 import Badge from '../components/table/Badge'
 import { fetchCaseHistory } from '../api/cases'
 import {
+  formatSqliteDateTime,
   formatJalaliDateTime,
-  formatNextActionDateTime,
   jalaliDateTimeStyle,
   orDash,
   toEnDigits,
@@ -256,7 +256,7 @@ export default function History() {
                     <td className={cell}>{orDash(row.operation)}</td>
                     <td className={cell}>
                       <span style={jalaliDateTimeStyle}>
-                        {formatJalaliDateTime(row.created_at)}
+                        {formatSqliteDateTime(row.created_at)}
                       </span>
                     </td>
                     <td className={cell}>
@@ -271,7 +271,7 @@ export default function History() {
                     <td className={cell}>{orDash(row.next_action)}</td>
                     <td className={cell}>
                       <span style={jalaliDateTimeStyle}>
-                        {formatNextActionDateTime(row.next_action_date)}
+                        {formatJalaliDateTime(row.next_action_date)}
                       </span>
                     </td>
                     <td className={`${cell} max-w-sm whitespace-normal text-xs text-slate-600`}>

@@ -70,8 +70,8 @@ export const DEBT_CLASSES = [
 
 // نوع اقدام (سابقه اکشن‌ها) — بخش ۵.۴ و ۳.۲ PRD
 export const ACTION_TYPE = {
-  warning_sms: { label: 'پیامک هشدار', icon: 'sms' },
-  threatening_sms: { label: 'پیامک تهدید', icon: 'sms' },
+  warning_sms: { label: 'ارسال پیامک هشدار', icon: 'sms' },
+  threatening_sms: { label: 'ارسال پیامک تهدید', icon: 'sms' },
   warning_autocall: { label: 'تماس خودکار هشدار', icon: 'autocall' },
   threatening_autocall: { label: 'تماس خودکار تهدید', icon: 'autocall' },
   payment_full: { label: 'پرداخت کامل', icon: 'payment' },
@@ -140,6 +140,14 @@ export const HISTORY_OPERATIONS = [
   'اعمال تغییر استراتژی معوق',
   'به‌روزرسانی اطلاعات پرونده',
   'به‌روزرسانی اطلاعات مالی پرونده',
+  'ارسال پیامک هشدار',
+  'ارسال پیامک تهدید',
+  'تماس خودکار هشدار',
+  'تماس خودکار تهدید',
+  'ارسال پیامک هشدار — تلاش مجدد',
+  'ارسال پیامک تهدید — تلاش مجدد',
+  'تماس خودکار هشدار — تلاش مجدد',
+  'تماس خودکار تهدید — تلاش مجدد',
   'اجرای پیامک',
   'اجرای پیامک (شبیه‌سازی)',
   'ارسال ناموفق پیامک — تلاش مجدد',

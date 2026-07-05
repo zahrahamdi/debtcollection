@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS case_actions (
   body_text   TEXT,                                        -- متن پیامک یا متن تماس
   result      TEXT,                                        -- نتیجه اقدام
   action_date TEXT,                                        -- تاریخ انجام
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),  -- زمان ثبت (برای resolve last_action)
   cost        INTEGER NOT NULL DEFAULT 0,                  -- هزینه اکشن
   repeat_count INTEGER NOT NULL DEFAULT 0,                 -- تعداد تکرار این اکشن تا این تلاش
   -- فیلدهای خروجی تماس مذاکره‌کننده (در صورت وجود)
@@ -265,7 +266,7 @@ CREATE TABLE IF NOT EXISTS case_actions (
 CREATE TABLE IF NOT EXISTS promises (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   case_id      INTEGER NOT NULL,
-  promised_date TEXT,                                      -- تاریخ سررسید تعهد
+  promised_datetime TEXT,                                  -- تاریخ و ساعت سررسید (YYYY/MM/DD HH:mm)
   amount       INTEGER NOT NULL DEFAULT 0,                 -- مبلغ تعهد
   status       TEXT    NOT NULL DEFAULT 'pending',         -- pending | fulfilled | broken
   created_at   TEXT    NOT NULL DEFAULT (datetime('now')),

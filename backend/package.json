@@ -22,7 +22,6 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "kavenegar": "^1.1.4",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
     "sql.js": "^1.14.1",

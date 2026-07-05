@@ -5,9 +5,10 @@
 | لایه | تکنولوژی |
 |------|-----------|
 | Backend | Node.js · Express 5 · sql.js (SQLite) |
-| Frontend | React 19 · Vite · Tailwind CSS |
+| Frontend | React 19 · Vite · Tailwind CSS · **Recharts** · **React Flow** |
 | پیامک | Kavenegar (یا حالت Mock) |
 | زمان‌بند | node-cron — موتور استراتژی هر ۱ دقیقه |
+| احراز هویت (دمو) | Mock در فرانت — **بدون لاگین/ثبت‌نام** |
 
 ## مستندات
 
@@ -89,7 +90,13 @@ debt-collection-mng-project/
 │   ├── database.sqlite            # دیتابیس محلی (در git نیست)
 │   └── .env.example
 ├── frontend/
-│   └── src/                       # صفحات React، API client، کامپوننت‌ها
+│   └── src/
+│       ├── pages/                 # Cases, Reports, AdminPanel, …
+│       ├── components/
+│       │   ├── charts/            # Recharts: pie/bar مشترک
+│       │   └── reports/           # FunnelFlowChart (React Flow)
+│       ├── api/                   # axios wrappers
+│       └── utils/auth.js          # mock نقش admin | negotiator
 ├── PRD-DigiPay.md
 ├── PROJECT-STATUS.md
 ├── TECHNICAL.md
@@ -105,7 +112,7 @@ debt-collection-mng-project/
 - **موتور استراتژی:** اجرای خودکار هر ۱ دقیقه، تکرار فقط برای نتایج انتخاب‌شده، عبور به اقدام بعدی، **شکست استراتژی** و CEI boost
 - **عملیات گروهی:** آپلود Excel پرونده، پرداخت، تخصیص / تخصیص مجدد
 - **CEI و سگمنت:** فرمول نسخه‌دار، تخصیص استراتژی، A/B Test
-- **گزارشات:** خلاصه وضعیت، نرخ تبدیل اقدام‌ها، A/B Test
+- **گزارشات (`/reports`):** سه تب — **پرونده‌ها** (کارت KPI، نمودار وضعیت، روند ایجاد/پرداخت کامل)، **استراتژی‌ها** (عملکرد، هزینه/وصول، Funnel با React Flow)، **مذاکره‌کنندگان** (جدول + pie دلایل عدم پرداخت)
 - **تاریخچه:** Audit Trail با فیلتر ۵ نوع اقدام
 - **بدهکاران / اقساط:** لیست بدهکار، شماره تماس، اقساط پرونده
 
@@ -123,8 +130,13 @@ debt-collection-mng-project/
 | `GET /api/strategies` | استراتژی‌ها |
 | `GET /api/cases/:id/history` | تاریخچه یک پرونده |
 | `GET /api/debtors` | لیست بدهکاران |
-| `GET /api/reports/summary` | گزارش خلاصه |
-| `GET /api/reports/action-conversion` | نرخ تبدیل اقدام‌ها |
+| `GET /api/reports/cases` | گزارش پرونده‌ها (KPI، وضعیت، روند) |
+| `GET /api/reports/funnel` | Funnel استراتژی |
+| `GET /api/reports/strategies/performance` | عملکرد استراتژی‌ها + A/B |
+| `GET /api/reports/strategies/cost` | هزینه و وصول به تفکیک اقدام |
+| `GET /api/reports/negotiators` | عملکرد مذاکره‌کنندگان |
+| `GET /api/reports/meta` | متادیتا (استان‌ها و …) |
+| `GET /api/reports/summary` | *(deprecated)* — جایگزین: `/cases` |
 | `POST /api/bulk/assign-cases` | تخصیص گروهی Excel |
 
 لیست کامل endpointها در [TECHNICAL.md](./TECHNICAL.md#۶-api-reference).
@@ -174,9 +186,26 @@ debt-collection-mng-project/
 
 ---
 
-## کاربر دمو
+## احراز هویت و دسترسی (دمو)
 
-در فرانت‌اند احراز هویت واقعی وجود ندارد. کاربر mock پیش‌فرض: **زهرا حمیدی** (ادمین) — `frontend/src/utils/auth.js`.
+**لاگین، ثبت‌نام، JWT، session و جدول `users` در نسخه فعلی وجود ندارد.**
+
+| لایه | وضعیت |
+|------|--------|
+| Frontend | `frontend/src/utils/auth.js` — کاربر mock: `{ name, role: 'admin' \| 'negotiator' }` |
+| Backend | بدون middleware امنیتی؛ همه APIها بدون token |
+| Audit | فیلد `user_name` (متن آزاد) در history/settings/bulk — از body فرانت |
+
+**دو نقش محصولی:** `admin` · `negotiator` — جدول کامل در [PRD §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
+
+**کنترل UI (فقط فرانت):**
+- منوی sidebar: `adminOnly` در `navItems.js`
+- Guard صفحه: `Reports`، `BulkOperations` → ریدایرکت به `/cases` اگر نه admin
+- عملیات: تخصیص، سینک Sheet، ثبت تماس (مذاکره‌کننده فقط پرونده خودش)
+
+**کاربر پیش‌فرض:** زهرا حمیدی (ادمین). برای تست نقش مذاکره‌کننده: `role: 'negotiator'` و `negotiatorId` در `auth.js`.
+
+جزئیات معماری: [TECHNICAL.md — احراز هویت](./TECHNICAL.md#۱۰-احراز-هویت-و-دسترسی-دمو).
 
 ---
 

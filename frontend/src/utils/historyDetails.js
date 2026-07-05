@@ -1,4 +1,4 @@
-import { formatRial, toFaDigits } from './format'
+import { formatRial, toFaDigits, formatJalaliDateTime } from './format'
 import { actionTypeLabel } from './constants'
 
 function parseDetails(raw) {
@@ -82,15 +82,17 @@ function formatCallOutcome(d) {
     hasValue(fields.call_status) && `وضعیت تماس: ${fields.call_status}`,
     hasValue(fields.no_payment_reason) && `دلیل عدم پرداخت: ${fields.no_payment_reason}`,
     hasValue(fields.payment_decision) && `تصمیم به پرداخت: ${fields.payment_decision}`,
-    hasValue(fields.promised_date) && `تاریخ تعهد پرداخت: ${toFaDigits(fields.promised_date)}`,
+    (hasValue(fields.promised_datetime) || hasValue(fields.promised_date)) &&
+      `تاریخ تعهد پرداخت: ${formatJalaliDateTime(fields.promised_datetime || fields.promised_date)}`,
     hasValue(fields.promised_amount) && `مبلغ تعهد پرداخت: ${rial(fields.promised_amount)}`,
-    !hasValue(fields.promised_date) &&
+    !hasValue(fields.promised_datetime) &&
+      !hasValue(fields.promised_date) &&
       !hasValue(fields.promised_amount) &&
       fields.promised_summary &&
       `تعهد پرداخت: ${fields.promised_summary}`,
     hasValue(fields.call_duration) && `مدت تماس: ${toFaDigits(fields.call_duration)} دقیقه`,
     hasValue(fields.call_cost) && `هزینه تماس: ${rial(fields.call_cost)}`,
-    hasValue(fields.next_call_date) && `زمان تماس بعدی: ${toFaDigits(fields.next_call_date)}`,
+    hasValue(fields.next_call_date) && `زمان تماس بعدی: ${formatJalaliDateTime(fields.next_call_date)}`,
     fields.is_last_call === true && 'آخرین تماس مذاکره‌کننده: بله',
     hasValue(fields.next_action) && `اقدام بعدی: ${fields.next_action}`,
     hasValue(fields.description) && `توضیحات: ${fields.description}`,
@@ -302,12 +304,16 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
       return formatReassign(d || {}, text)
 
     case 'اجرای پیامک':
-    case 'اجرای پیامک (شبیه‌سازی)': {
+    case 'اجرای پیامک (شبیه‌سازی)':
+    case 'ارسال پیامک هشدار':
+    case 'ارسال پیامک تهدید': {
       if (text && !text.trim().startsWith('{')) return [`متن: ${text.trim()}`]
       return formatSmsAction(d || {}, text)
     }
 
-    case 'اجرای تماس خودکار': {
+    case 'اجرای تماس خودکار':
+    case 'تماس خودکار هشدار':
+    case 'تماس خودکار تهدید': {
       const actionType = d?.action_type
       if (actionType === 'warning_autocall' || actionType === 'threatening_autocall') {
         return formatAutocallAction(d || {})
@@ -317,6 +323,10 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
 
     case 'ارسال ناموفق پیامک — تلاش مجدد':
     case 'تماس خودکار ناموفق — تلاش مجدد':
+    case 'ارسال پیامک هشدار — تلاش مجدد':
+    case 'ارسال پیامک تهدید — تلاش مجدد':
+    case 'تماس خودکار هشدار — تلاش مجدد':
+    case 'تماس خودکار تهدید — تلاش مجدد':
       return formatAutomatedRetryFailure(d || {})
 
     case 'عبور به اقدام بعدی استراتژی':

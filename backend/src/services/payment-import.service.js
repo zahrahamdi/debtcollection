@@ -17,10 +17,12 @@ const {
   nextAllowedStartDatetime,
   isWithinAllowedWindow,
   isActionDue,
+  isJalaliPromisedOverdue,
 } = require('../db/dateUtil');
 
 const MAX_ROWS = 1000;
 const PARTIAL_RESUME_ACTION = 'ادامه استراتژی پس از پرداخت جزئی';
+const PARTIAL_BEFORE_PROMISE_OP = 'پرداخت جزئی قبل از سررسید تعهد';
 
 const HEADER_TO_FIELD = {
   'شناسه اعتبار': 'credit_id',
@@ -366,6 +368,21 @@ function resumePartialPaymentCase(caseRow, meta) {
   return resultSnapshot;
 }
 
+function processPendingPromisesOnPayment(caseRow, paymentAmount, userName, caseSnapshot) {
+  const pending = query(
+    `SELECT * FROM promises WHERE case_id = $id AND status = 'pending' ORDER BY id ASC`,
+    { $id: caseRow.id }
+  );
+
+  for (const p of pending) {
+    if (paymentAmount < Number(p.amount)) continue;
+
+    run(`UPDATE promises SET status = 'fulfilled' WHERE id = $pid`, { $pid: p.id });
+    const details = `تاریخ سررسید: ${p.promised_datetime} · مبلغ تعهد: ${formatRial(p.amount)}`;
+    insertCaseHistory(caseRow.id, caseRow.debtor_id, userName, 'انجام تعهد پرداخت', caseSnapshot, details);
+  }
+}
+
 function processFullPayment(caseRow, amount, paymentDate, userName, extras = {}) {
   const prevClaims = Number(caseRow.claims_amount) || 0;
   const actionDatetime = paymentDatetimeFromJalali(paymentDate);
@@ -405,10 +422,119 @@ function processFullPayment(caseRow, amount, paymentDate, userName, extras = {})
   };
 
   insertCaseHistory(caseRow.id, caseRow.debtor_id, userName, 'پرداخت کامل بدهی', updated, historyDetails);
+  processPendingPromisesOnPayment(caseRow, amount, userName, updated);
   return { payment_type: 'full', previous_claims: prevClaims, new_claims: 0 };
 }
 
+function getActivePendingPromise(caseId) {
+  return query(
+    `SELECT * FROM promises WHERE case_id = $id AND status = 'pending' ORDER BY id DESC LIMIT 1`,
+    { $id: caseId }
+  )[0] || null;
+}
+
+function processPartialPaymentBeforePromiseDue(caseRow, amount, paymentDate, userName, extras, pendingPromise) {
+  const prevClaims = Number(caseRow.claims_amount) || 0;
+  const newClaims = prevClaims - amount;
+  const previousNextAction = caseRow.next_action;
+  const previousNextActionDate = caseRow.next_action_date;
+
+  const { cei, formulaVersion } = recalculateCei(caseRow, newClaims);
+  const formulaType = formulaTypeOf(caseRow.credit_type);
+  const newSegment = findSegmentForCei(cei, formulaType);
+  if (!newSegment) {
+    throw new Error('سگمنتی متناسب با CEI جدید یافت نشد');
+  }
+
+  const gapDays = parseInt(getSetting('partial_payment_gap_days', '10'), 10);
+  const nextActionDate = addDaysToJalaliDatetime(paymentDate, gapDays);
+  const actionDatetime = paymentDatetimeFromJalali(paymentDate);
+  const resultText = buildPaymentResultText(amount, prevClaims, newClaims);
+  const newOutstanding = Math.max(0, (Number(caseRow.outstanding_debt) || 0) - amount);
+
+  run(
+    `UPDATE cases SET claims_amount = $claims, outstanding_debt = $out, cei = $cei,
+     cei_formula_version = $ver, segment_id = $seg,
+     last_payment_date = $lpd, last_payment_amount = $lpa,
+     next_action = $na, next_action_date = $nad, action_status = $as,
+     updated_at = datetime('now') WHERE id = $id`,
+    {
+      $claims: newClaims,
+      $out: newOutstanding,
+      $cei: cei,
+      $ver: formulaVersion,
+      $seg: newSegment.id,
+      $lpd: paymentDate,
+      $lpa: amount,
+      $na: previousNextAction,
+      $nad: nextActionDate,
+      $as: calcActionStatus(nextActionDate),
+      $id: caseRow.id,
+    }
+  );
+
+  run(
+    `INSERT INTO payments (case_id, amount, payment_date, payment_type) VALUES ($cid, $amt, $pd, 'partial')`,
+    { $cid: caseRow.id, $amt: amount, $pd: paymentDate }
+  );
+
+  insertPaymentAction(caseRow.id, 'payment_partial', resultText, actionDatetime);
+
+  const updated = {
+    case_status: caseRow.case_status,
+    next_action: previousNextAction,
+    next_action_date: nextActionDate,
+  };
+
+  const historyDetails = {
+    amount,
+    previous_claims: prevClaims,
+    new_claims: newClaims,
+    transaction_id: extras.transaction_id || null,
+    description: extras.description || null,
+    promise_datetime: pendingPromise.promised_datetime,
+    promise_amount: Number(pendingPromise.amount),
+    previous_next_action: previousNextAction,
+    previous_next_action_date: previousNextActionDate,
+    gap_days: gapDays,
+  };
+
+  insertCaseHistory(
+    caseRow.id,
+    caseRow.debtor_id,
+    userName,
+    PARTIAL_BEFORE_PROMISE_OP,
+    updated,
+    historyDetails
+  );
+
+  return {
+    payment_type: 'partial',
+    previous_claims: prevClaims,
+    new_claims: newClaims,
+    cei,
+    segment_id: newSegment.id,
+    before_promise_due: true,
+  };
+}
+
 function processPartialPayment(caseRow, amount, paymentDate, userName, extras = {}) {
+  const pendingPromise = getActivePendingPromise(caseRow.id);
+  if (
+    pendingPromise &&
+    amount < Number(pendingPromise.amount) &&
+    !isJalaliPromisedOverdue(pendingPromise.promised_datetime)
+  ) {
+    return processPartialPaymentBeforePromiseDue(
+      caseRow,
+      amount,
+      paymentDate,
+      userName,
+      extras,
+      pendingPromise
+    );
+  }
+
   const prevClaims = Number(caseRow.claims_amount) || 0;
   const newClaims = prevClaims - amount;
   const previousSegmentId = caseRow.segment_id;
@@ -479,6 +605,7 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
   };
 
   insertCaseHistory(caseRow.id, caseRow.debtor_id, userName, 'پرداخت جزئی بدهی', updated, historyDetails);
+  processPendingPromisesOnPayment(caseRow, amount, userName, updated);
 
   if (isActionDue(nextActionDate)) {
     const refreshed = query('SELECT * FROM cases WHERE id = $id', { $id: caseRow.id })[0];

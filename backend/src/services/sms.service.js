@@ -20,55 +20,34 @@ function replacePlaceholders(text, { userName, claimsAmount, paymentLink = MOCK_
     .replace(/\{لینک_پرداخت\}/g, paymentLink);
 }
 
-function isMockMode() {
-  return process.env.SMS_MOCK === 'true';
-}
+async function sendSms(phoneNumber, text) {
+  await new Promise((resolve) => setTimeout(resolve, Math.random() * 1000 + 500));
 
-/**
- * ارسال پیامک — در حالت SMS_MOCK=true بدون فراخوانی کاوه‌نگار شبیه‌سازی می‌شود.
- * @returns {Promise<{ ok: boolean, simulated: boolean }>}
- */
-function sendSms(phoneNumber, text) {
-  if (isMockMode()) {
-    console.log(`[sms] شبیه‌سازی → ${phoneNumber}: ${String(text).slice(0, 80)}${text.length > 80 ? '…' : ''}`);
-    return Promise.resolve({ ok: true, simulated: true });
-  }
+  const results = [
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: true, result: 'ارسال شد' },
+    { success: false, result: 'ارسال نشد' },
+    { success: false, result: 'ارسال نشد' },
+  ];
 
-  const Kavenegar = require('kavenegar');
-  const apikey = process.env.KAVENEGAR_API_KEY;
-  const sender = process.env.KAVENEGAR_SENDER;
+  const picked = results[Math.floor(Math.random() * results.length)];
 
-  if (!apikey) {
-    console.error('[sms] KAVENEGAR_API_KEY تنظیم نشده است');
-    return Promise.resolve({ ok: false, simulated: false });
-  }
-  if (!sender) {
-    console.error('[sms] KAVENEGAR_SENDER تنظیم نشده است');
-    return Promise.resolve({ ok: false, simulated: false });
-  }
+  console.log(`[SMS Mock] به ${phoneNumber}: ${text.substring(0, 30)}... → ${picked.result}`);
 
-  const api = Kavenegar.KavenegarApi({ apikey });
-
-  return new Promise((resolve) => {
-    api.Send(
-      { message: text, sender, receptor: phoneNumber },
-      (response, status, message) => {
-        if (status === 200) {
-          resolve({ ok: true, simulated: false });
-        } else {
-          console.error('[sms] خطا در ارسال:', status, message, response);
-          resolve({ ok: false, simulated: false });
-        }
-      }
-    );
-  });
+  return picked;
 }
 
 module.exports = {
   sendSms,
   replacePlaceholders,
   formatRial,
-  isMockMode,
   MOCK_PAYMENT_LINK,
   NO_ANSWER_SMS_TEXT,
   PAYMENT_LINK_SMS_TEMPLATE,

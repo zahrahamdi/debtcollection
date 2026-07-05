@@ -3,10 +3,11 @@ import toast from 'react-hot-toast'
 import { format, parse, differenceInCalendarDays } from 'date-fns-jalali'
 import { Link2, Scale } from 'lucide-react'
 import Modal from './Modal'
+import JalaliDatePicker from '../form/JalaliDatePicker'
 import { submitCallOutcome } from '../../api/cases'
 import { fetchSettings } from '../../api/settings'
 import { currentUser } from '../../utils/auth'
-import { toFaDigits, toEnDigits, formatRial } from '../../utils/format'
+import { toFaDigits, toEnDigits, formatRial, formatJalaliDateTime, jalaliDateTimeStyle } from '../../utils/format'
 
 const fieldClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
@@ -35,6 +36,7 @@ const emptyForm = {
   no_payment_reason: '',
   payment_decision: '',
   promised_date: '',
+  promised_time: '',
   promised_amount: '',
   next_call_date: '',
   next_call_time: '',
@@ -45,26 +47,32 @@ const emptyForm = {
 
 const two = (n) => String(n).padStart(2, '0')
 
-// ساعت HH:mm با ارقام لاتین (برای input type=time)
 function hhmmFromOffset(offsetMin = 0) {
   const d = new Date(Date.now() + offsetMin * 60000)
   return `${two(d.getHours())}:${two(d.getMinutes())}`
 }
 
-// تاریخ جلالی YYYY/MM/DD با آفست دقیقه
 function jalaliDateFromOffset(offsetMin = 0) {
   return format(new Date(Date.now() + offsetMin * 60000), 'yyyy/MM/dd')
 }
 
-// تبدیل رشته‌ی تاریخ جلالی (با ارقام فارسی/لاتین) به Date
 function parseJalali(str) {
   const en = toEnDigits(str).trim()
   if (!/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(en)) return null
   const d = parse(en, 'yyyy/MM/dd', new Date())
-  return isNaN(d.getTime()) ? null : d
+  return Number.isNaN(d.getTime()) ? null : d
 }
 
-// آیا ساعت HH:mm در بازه [from, to] است؟
+function parseJalaliDateTimeLocal(dateStr, timeStr) {
+  const d = parseJalali(dateStr)
+  if (!d) return null
+  const en = toEnDigits(timeStr)
+  const [h, m] = en.split(':').map(Number)
+  if (Number.isNaN(h) || Number.isNaN(m)) return null
+  d.setHours(h, m, 0, 0)
+  return d
+}
+
 function timeInWindow(t, from, to) {
   const en = toEnDigits(t)
   const [h, m] = en.split(':').map(Number)
@@ -96,7 +104,6 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
   const set = (patch) => setForm((f) => ({ ...f, ...patch }))
   const willPay = form.payment_decision === 'دارد'
 
-  // اطلاعات مرحله تماس مذاکره‌کننده در استراتژی پرونده
   const stage = caseRow?.negotiator_stage || null
   const allowedFrom = stage?.allowed_from || '09:00'
   const allowedTo = stage?.allowed_to || '18:00'
@@ -104,7 +111,6 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
   const waitRepeatMinutes = Number(stage?.wait_repeat_minutes) || 0
   const nextActionLabel = stage?.next_action_label || 'شکست استراتژی'
 
-  // تعداد تماس‌های انجام‌شده روی اقدام مذاکرهٔ جاری (هم‌تراز با backend)
   const attemptsSoFar = Number(caseRow?.current_action_repeat) || 0
   const maxCalls = Number(caseRow?.max_call_count) || Number(stage?.max_repeat) || 3
   const isNoAnswer = form.call_status === 'پاسخگو نبود'
@@ -112,40 +118,53 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
     form.call_status === 'پاسخگو بود' || form.call_status === 'ناسزا گفت'
   const reachedMax = attemptsSoFar + 1 >= maxCalls
 
-  // تعیین حالت فیلدهای تماس بعدی
-  //  - noanswer: تماس مجدد خودکار (فیلد تماس بعدی مخفی).
-  //  - last: آخرین تماس مجاز — بدون زمان‌بندی تماس بعدی.
-  //  - willpay: تاریخ = تاریخ تعهد، ساعت قابل ویرایش.
-  //  - followup: پاسخگو بود ولی تعهد ندارد → مذاکره‌کننده تاریخ و ساعت را تعیین می‌کند.
   let mode
-  if (isNoAnswer) mode = 'noanswer'
+  if (reachedMax && isNoAnswer) mode = 'last_noanswer'
+  else if (isNoAnswer) mode = 'noanswer'
+  else if (reachedMax && willPay) mode = 'last_willpay'
   else if (reachedMax) mode = 'last'
   else if (willPay) mode = 'willpay'
   else mode = 'followup'
 
-  const showNextCall = mode !== 'noanswer' && mode !== 'last'
-  const dateEditable = mode === 'followup'
-  const timeEditable = mode === 'willpay' || mode === 'followup'
+  const hideNextCall = ['noanswer', 'last', 'last_noanswer', 'last_willpay'].includes(mode)
+  const showNextCall = !hideNextCall
+  const timeEditable = mode === 'followup'
+  const promiseLockedNextCall = mode === 'willpay'
 
-  // autofill تاریخ/ساعت تماس بعدی بر اساس حالت
   useEffect(() => {
-    if (!open || mode === 'noanswer' || mode === 'last') return
+    if (!open || !willPay) return
+    setForm((f) => ({
+      ...f,
+      promised_date: f.promised_date || jalaliDateFromOffset(0),
+      promised_time: f.promised_time || hhmmFromOffset(0),
+    }))
+  }, [open, willPay])
+
+  useEffect(() => {
+    if (!open || hideNextCall) return
     if (mode === 'willpay') {
-      // تاریخ = تاریخ تعهد (readonly، از فیلد promised_date خوانده می‌شود)، ساعت = ساعت فعلی (قابل ویرایش)
-      setForm((f) => ({ ...f, next_call_time: hhmmFromOffset(0) }))
-    } else {
-      // followup: تاریخ و ساعت پیش‌فرض = الان + wait (قابل ویرایش)
       setForm((f) => ({
         ...f,
-        next_call_date: jalaliDateFromOffset(waitMinutes),
-        next_call_time: hhmmFromOffset(waitMinutes),
+        next_call_date: f.promised_date,
+        next_call_time: f.promised_time,
       }))
+      return
     }
+    setForm((f) => ({
+      ...f,
+      next_call_date: jalaliDateFromOffset(waitMinutes),
+      next_call_time: hhmmFromOffset(waitMinutes),
+    }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, open, waitMinutes])
+  }, [mode, open, waitMinutes, form.promised_date, form.promised_time])
 
-  // مقدار نمایش تاریخ تماس بعدی (در حالت willpay = تاریخ تعهد)
-  const nextCallDateValue = mode === 'willpay' ? form.promised_date : form.next_call_date
+  const nextCallDateValue = promiseLockedNextCall ? form.promised_date : form.next_call_date
+  const nextCallTimeValue = promiseLockedNextCall ? form.promised_time : form.next_call_time
+
+  const promisedDatetimePreview =
+    form.promised_date && form.promised_time
+      ? `${toEnDigits(form.promised_date)} ${toEnDigits(form.promised_time)}`
+      : null
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -157,26 +176,35 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
     }
 
     if (willPay) {
-      if (!form.promised_date || form.promised_amount === '')
-        return setError('تاریخ و مبلغ تعهد پرداخت اجباری است.')
+      if (!form.promised_date || !form.promised_time || form.promised_amount === '')
+        return setError('تاریخ، ساعت و مبلغ تعهد پرداخت اجباری است.')
       if (Number(toEnDigits(form.promised_amount)) > Number(caseRow?.claims_amount ?? 0))
         return setError('مبلغ تعهد نباید بیشتر از مطالبات پرونده باشد.')
       const pd = parseJalali(form.promised_date)
-      if (!pd) return setError('فرمت تاریخ تعهد نامعتبر است (مثال: ۱۴۰۴/۰۷/۱۲).')
+      if (!pd) return setError('فرمت تاریخ تعهد نامعتبر است.')
       const diff = differenceInCalendarDays(pd, new Date())
       if (diff < 0) return setError('تاریخ تعهد نمی‌تواند در گذشته باشد.')
       if (diff > maxPromiseDays)
         return setError(`تاریخ تعهد نباید بیش از ${toFaDigits(maxPromiseDays)} روز از امروز باشد.`)
+      const promisedTime = toEnDigits(form.promised_time)
+      if (!/^\d{1,2}:\d{2}$/.test(promisedTime))
+        return setError('فرمت ساعت تعهد نامعتبر است.')
+      if (!timeInWindow(promisedTime, allowedFrom, allowedTo))
+        return setError(
+          `ساعت تعهد باید در بازه مجاز (${toFaDigits(allowedFrom)} تا ${toFaDigits(allowedTo)}) باشد.`
+        )
+      const promisedDt = parseJalaliDateTimeLocal(form.promised_date, promisedTime)
+      if (!promisedDt) return setError('تاریخ/ساعت تعهد نامعتبر است.')
+      if (promisedDt.getTime() < Date.now())
+        return setError('تاریخ و ساعت تعهد نمی‌تواند در گذشته باشد.')
     }
 
-    // اعتبارسنجی تاریخ/ساعت تماس بعدی (در حالت عدم پاسخگویی مخفی و توسط سیستم تعیین می‌شود)
-    if (showNextCall) {
-      const dateStr = willPay ? form.promised_date : form.next_call_date
+    if (showNextCall && mode === 'followup') {
+      const dateStr = form.next_call_date
       const timeStr = toEnDigits(form.next_call_time)
       if (!dateStr || !timeStr) return setError('تاریخ و ساعت تماس بعدی اجباری است.')
       if (!/^\d{1,2}:\d{2}$/.test(timeStr)) return setError('فرمت ساعت تماس بعدی نامعتبر است.')
-      if (dateEditable && !parseJalali(dateStr))
-        return setError('فرمت تاریخ تماس بعدی نامعتبر است.')
+      if (!parseJalali(dateStr)) return setError('فرمت تاریخ تماس بعدی نامعتبر است.')
       if (!timeInWindow(timeStr, allowedFrom, allowedTo))
         return setError(
           `ساعت تماس بعدی باید در بازه مجاز (${toFaDigits(allowedFrom)} تا ${toFaDigits(allowedTo)}) باشد.`
@@ -186,20 +214,30 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
     setSaving(true)
     setError('')
     try {
-      const nextCallDate = !showNextCall
-        ? null
-        : willPay
-          ? toEnDigits(form.promised_date)
-          : toEnDigits(form.next_call_date)
+      const promisedDate = willPay ? toEnDigits(form.promised_date) : null
+      const promisedTime = willPay ? toEnDigits(form.promised_time) : null
+      const promisedDatetime =
+        willPay && promisedDate && promisedTime ? `${promisedDate} ${promisedTime}` : null
+
       await submitCallOutcome(caseRow.id, {
         call_status: form.call_status,
         call_duration: duration,
-        no_payment_reason: form.no_payment_reason || null,
+        no_payment_reason: isNoAnswer ? null : form.no_payment_reason || null,
         payment_decision: form.payment_decision || null,
-        promised_date: willPay ? toEnDigits(form.promised_date) : null,
+        promised_date: promisedDate,
+        promised_time: promisedTime,
+        promised_datetime: promisedDatetime,
         promised_amount: willPay ? Number(toEnDigits(form.promised_amount)) : null,
-        next_call_date: nextCallDate,
-        next_call_time: !showNextCall ? null : toEnDigits(form.next_call_time),
+        next_call_date: !showNextCall
+          ? null
+          : willPay
+            ? promisedDate
+            : toEnDigits(form.next_call_date),
+        next_call_time: !showNextCall
+          ? null
+          : willPay
+            ? promisedTime
+            : toEnDigits(form.next_call_time),
         description: form.description || null,
         refer_to_legal: form.refer_to_legal,
         send_payment_link: form.send_payment_link,
@@ -253,6 +291,12 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
           <div className="rounded-xl bg-brand-50 px-3 py-2 text-center text-sm font-medium text-brand-700">
             تماس {toFaDigits(attemptsSoFar + 1)} از {toFaDigits(maxCalls)}
           </div>
+          {caseRow.next_action_date && (
+            <div className="rounded-xl bg-slate-50 px-3 py-2 text-center text-xs text-slate-500">
+              زمان اقدام بعدی:{' '}
+              <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(caseRow.next_action_date)}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -270,7 +314,21 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
               const status = e.target.value
               set({
                 call_status: status,
-                ...(status === 'پاسخگو نبود' ? { call_duration: '' } : {}),
+                ...(status === 'پاسخگو نبود'
+                  ? {
+                      call_duration: '',
+                      no_payment_reason: '',
+                      payment_decision: '',
+                      promised_date: '',
+                      promised_time: '',
+                      promised_amount: '',
+                      next_call_date: '',
+                      next_call_time: '',
+                      description: '',
+                      refer_to_legal: false,
+                      send_payment_link: false,
+                    }
+                  : {}),
               })
             }}
           >
@@ -283,6 +341,22 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
           </select>
         </div>
 
+        {isNoAnswer ? (
+          <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {mode === 'last_noanswer' ? (
+              <>
+                این آخرین تماس مجاز است و مشتری پاسخگو نبود.
+                <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
+              </>
+            ) : (
+              <>
+                عدم پاسخگویی ثبت می‌شود و سیستم زمان تماس مجدد را به‌صورت خودکار «اکنون +{' '}
+                {toFaDigits(waitRepeatMinutes)} دقیقه» تنظیم می‌کند (تا سقف تکرار).
+              </>
+            )}
+          </div>
+        ) : (
+          <>
         <div>
           <label className={labelClass}>
             مدت تماس به دقیقه
@@ -292,10 +366,9 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
             type="number"
             dir="ltr"
             min={durationRequired ? 1 : 0}
-            className={isNoAnswer ? disabledFieldClass : fieldClass}
-            placeholder={isNoAnswer ? '—' : 'مثلاً ۵'}
-            value={isNoAnswer ? '' : form.call_duration}
-            disabled={isNoAnswer}
+            className={fieldClass}
+            placeholder="مثلاً ۵"
+            value={form.call_duration}
             onChange={(e) => set({ call_duration: e.target.value })}
           />
         </div>
@@ -329,15 +402,25 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
         </div>
 
         {willPay && (
-          <div className="grid grid-cols-2 gap-3 rounded-xl bg-brand-50/50 p-3">
-            <div>
-              <label className={labelClass}>تاریخ اعلام‌شده برای پرداخت</label>
-              <input
-                className={fieldClass}
-                placeholder="۱۴۰۴/۰۷/۱۰"
-                value={form.promised_date}
-                onChange={(e) => set({ promised_date: e.target.value })}
-              />
+          <div className="space-y-3 rounded-xl bg-brand-50/50 p-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>تاریخ تعهد</label>
+                <JalaliDatePicker
+                  value={form.promised_date}
+                  onChange={(v) => set({ promised_date: v })}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>ساعت تعهد</label>
+                <input
+                  type="time"
+                  dir="ltr"
+                  className={fieldClass}
+                  value={toEnDigits(form.promised_time)}
+                  onChange={(e) => set({ promised_time: e.target.value })}
+                />
+              </div>
             </div>
             <div>
               <label className={labelClass}>مبلغ تعهد پرداخت (ریال)</label>
@@ -354,6 +437,9 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
                 </p>
               )}
             </div>
+            <p className="text-[11px] text-slate-400">
+              بازه مجاز ساعت تعهد: {toFaDigits(allowedFrom)} تا {toFaDigits(allowedTo)}
+            </p>
           </div>
         )}
 
@@ -362,13 +448,14 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelClass}>تاریخ تماس بعدی</label>
-                <input
-                  className={dateEditable ? fieldClass : disabledFieldClass}
-                  placeholder="۱۴۰۴/۰۷/۱۵"
-                  value={nextCallDateValue}
-                  disabled={!dateEditable}
-                  onChange={(e) => set({ next_call_date: e.target.value })}
-                />
+                {promiseLockedNextCall ? (
+                  <JalaliDatePicker value={nextCallDateValue} onChange={() => {}} disabled />
+                ) : (
+                  <JalaliDatePicker
+                    value={nextCallDateValue}
+                    onChange={(v) => set({ next_call_date: v })}
+                  />
+                )}
               </div>
               <div>
                 <label className={labelClass}>ساعت تماس بعدی</label>
@@ -376,34 +463,41 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
                   type="time"
                   dir="ltr"
                   className={timeEditable ? fieldClass : disabledFieldClass}
-                  value={toEnDigits(form.next_call_time)}
+                  value={toEnDigits(nextCallTimeValue)}
                   disabled={!timeEditable}
                   onChange={(e) => set({ next_call_time: e.target.value })}
                 />
               </div>
             </div>
-            <p className="mt-1 text-[11px] text-slate-400">
-              بازه مجاز تماس مذاکره‌کننده: {toFaDigits(allowedFrom)} تا {toFaDigits(allowedTo)}
-            </p>
+            {promiseLockedNextCall && (
+              <p className="mt-1 text-[11px] text-brand-600">
+                زمان تماس بعدی برابر زمان تعهد پرداخت است.
+              </p>
+            )}
+            {!promiseLockedNextCall && (
+              <p className="mt-1 text-[11px] text-slate-400">
+                بازه مجاز تماس مذاکره‌کننده: {toFaDigits(allowedFrom)} تا {toFaDigits(allowedTo)}
+              </p>
+            )}
           </div>
         ) : (
           <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            {mode === 'last' ? (
+            {mode === 'last_willpay' && (
               <>
-                این آخرین تماس مجاز مذاکره‌کننده در این استراتژی است. تماس بعدی زمان‌بندی نمی‌شود و
-                سیستم به‌طور خودکار به اقدام بعدی استراتژی می‌رود.
-                <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
+                این آخرین تماس مجاز است. چون تعهد پرداخت داده‌اید، سیستم تا تاریخ{' '}
+                {promisedDatetimePreview ? (
+                  <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(promisedDatetimePreview)}</span>
+                ) : (
+                  'تعهد'
+                )}{' '}
+                منتظر می‌ماند. در صورت عدم پرداخت تا آن تاریخ، اقدام بعدی: {nextActionLabel}
               </>
-            ) : reachedMax ? (
+            )}
+            {mode === 'last' && (
               <>
-                این آخرین تماس مجاز است. وضعیت «در انتظار تماس مجدد مذاکره‌کننده» ثبت می‌شود و سیستم
-                به‌طور خودکار به اقدام بعدی استراتژی می‌رود.
+                این آخرین تماس مجاز مذاکره‌کننده در این استراتژی است. سیستم به‌طور خودکار
+                به اقدام بعدی می‌رود.
                 <div className="mt-1 font-medium">اقدام بعدی: {nextActionLabel}</div>
-              </>
-            ) : (
-              <>
-                عدم پاسخگویی ثبت می‌شود و سیستم زمان تماس مجدد را به‌صورت خودکار «اکنون +{' '}
-                {toFaDigits(waitRepeatMinutes)} دقیقه» تنظیم می‌کند (تا سقف تکرار).
               </>
             )}
           </div>
@@ -441,6 +535,8 @@ export default function CallOutcomeModal({ open, onClose, caseRow, onSaved }) {
           <Link2 className="h-4 w-4 text-slate-400" />
           ارسال لینک پرداخت
         </label>
+          </>
+        )}
 
         {error && <p className="text-sm text-rose-500">{error}</p>}
       </form>

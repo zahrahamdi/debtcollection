@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import Badge from '../table/Badge'
 import { fetchCaseById } from '../../api/cases'
-import { formatRial, formatDate, formatNextActionDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
+import { formatRial, formatJalaliDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
 import { currentUser, isAdmin } from '../../utils/auth'
 import {
   caseStatusLabel,
@@ -107,12 +107,27 @@ function actionResultLabel(action, detail) {
   return NEGOTIATOR_RESULT_BY_STATUS[detail.case_status] || orDash(action.result)
 }
 
+function DateDisplay({ value }) {
+  return <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(value)}</span>
+}
+
 // وضعیت تعهد پرداخت (بخش ۵.۸ PRD)
 function promiseLabel(detail) {
   if (detail.active_promise) {
-    return `در انتظار — سررسید ${formatDate(detail.active_promise.promised_date)}`
+    return (
+      <>
+        در انتظار — سررسید <DateDisplay value={detail.active_promise.promised_datetime} />
+      </>
+    )
   }
-  if ((detail.broken_promises_count ?? 0) > 0) return 'نقض شده'
+  const lastBroken = (detail.promises || []).find((p) => p.status === 'broken')
+  if (lastBroken) {
+    return (
+      <>
+        نقض شده — سررسید <DateDisplay value={lastBroken.promised_datetime} />
+      </>
+    )
+  }
   return 'ندارد'
 }
 
@@ -210,17 +225,17 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                   label="اولین قسط پرداخت‌نشده"
                   value={installmentOf(detail.first_unpaid_no, detail.total_installments)}
                 />
-                <InfoRow label="تاریخ اولین قسط" value={formatDate(detail.first_unpaid_date)} />
+                <InfoRow label="تاریخ اولین قسط" value={<DateDisplay value={detail.first_unpaid_date} />} />
                 <InfoRow
                   label="آخرین قسط پرداخت‌نشده"
                   value={installmentOf(detail.last_unpaid_no, detail.total_installments)}
                 />
-                <InfoRow label="تاریخ آخرین قسط" value={formatDate(detail.last_unpaid_date)} />
+                <InfoRow label="تاریخ آخرین قسط" value={<DateDisplay value={detail.last_unpaid_date} />} />
                 <InfoRow
                   label="تعداد اقساط سررسید گذشته"
                   value={toFaDigits(orDash(detail.overdue_installments_count))}
                 />
-                <InfoRow label="تاریخ آخرین پرداخت" value={formatDate(detail.last_payment_date)} />
+                <InfoRow label="تاریخ آخرین پرداخت" value={<DateDisplay value={detail.last_payment_date} />} />
                 <InfoRow
                   label="مبلغ آخرین پرداخت (ریال)"
                   value={formatRial(detail.last_payment_amount)}
@@ -249,7 +264,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
               <SectionTitle>اقدام و تماس</SectionTitle>
               <div className="divide-y divide-slate-50">
                 <InfoRow label="آخرین اقدام انجام‌شده" value={orDash(normalizeLastActionLabel(detail.last_action))} />
-                <InfoRow label="تاریخ آخرین اقدام" value={formatDate(detail.last_action_date)} />
+                <InfoRow label="تاریخ آخرین اقدام" value={<DateDisplay value={detail.last_action_date} />} />
                 <InfoRow
                   label="تعداد تماس مذاکره‌کننده"
                   value={toFaDigits(detail.total_negotiator_calls ?? 0)}
@@ -367,7 +382,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                               className="text-[11px] text-slate-400"
                               style={jalaliDateTimeStyle}
                             >
-                              {formatNextActionDateTime(a.action_date)}
+                              <DateDisplay value={a.action_date} />
                             </span>
                           </div>
                           {a.body_text && (

@@ -11,6 +11,10 @@ const {
   jalaliDateToDatetime,
   jalaliDateTimeToDatetime,
   isTimeWithinAllowedWindow,
+  isJalaliDatetimeInPast,
+  normalizePromisedDatetime,
+  promisedDateFromDatetime,
+  promisedTimeFromDatetime,
   computeNextActionDate,
   todayJalali,
 } = require('../db/dateUtil');
@@ -228,7 +232,11 @@ router.get('/:id', (req, res) => {
       { $id: id }
     );
     const brokenPromisesCount = promises.filter((p) => p.status === 'broken').length;
-    const activePromise = promises.find((p) => p.status === 'pending') || null;
+    const activeRows = query(
+      `SELECT * FROM promises WHERE case_id = $id AND status = 'pending' ORDER BY id DESC LIMIT 1`,
+      { $id: id }
+    );
+    const activePromise = activeRows[0] || null;
 
     const files = query(`SELECT * FROM case_files WHERE case_id = $id`, { $id: id });
 
@@ -505,21 +513,37 @@ router.post('/:id/call-outcome', async (req, res) => {
     const userName = b.user_name || 'مذاکره‌کننده';
     const debtorName = `${c.first_name || ''} ${c.last_name || ''}`.trim();
 
+    const stage = computeNegotiatorStage(c.strategy_id) || {};
+    const allowedFrom = stage.allowed_from || '09:00';
+    const allowedTo = stage.allowed_to || '18:00';
+
     if (willPay) {
-      if (!b.promised_date || b.promised_amount === undefined || b.promised_amount === '') {
-        return res.status(400).json({ error: 'تاریخ و مبلغ تعهد پرداخت اجباری است' });
+      const promisedDatetimeNorm = normalizePromisedDatetime(b);
+      if (!promisedDatetimeNorm || b.promised_amount === undefined || b.promised_amount === '') {
+        return res.status(400).json({ error: 'تاریخ، ساعت و مبلغ تعهد پرداخت اجباری است' });
       }
+      const promisedDate = promisedDateFromDatetime(promisedDatetimeNorm);
+      const promisedTime = promisedTimeFromDatetime(promisedDatetimeNorm);
+
       if (Number(b.promised_amount) > Number(c.claims_amount)) {
         return res
           .status(400)
           .json({ error: 'مبلغ تعهد نباید بیشتر از مطالبات پرونده باشد' });
       }
+      if (!isTimeWithinAllowedWindow(promisedTime, allowedFrom, allowedTo)) {
+        return res.status(400).json({
+          error: `ساعت تعهد باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد`,
+        });
+      }
+      if (isJalaliDatetimeInPast(promisedDate, promisedTime)) {
+        return res.status(400).json({ error: 'تاریخ و ساعت تعهد نمی‌تواند در گذشته باشد' });
+      }
 
       const settingRow = query(
         `SELECT value FROM settings WHERE key = 'promise_to_pay_max_days'`
       );
-      const maxDays = parseInt(settingRow[0]?.value || '10');
-      const diffDays = daysDiffFromToday(b.promised_date);
+      const maxDays = parseInt(settingRow[0]?.value || '10', 10);
+      const diffDays = daysDiffFromToday(promisedDate);
 
       if (diffDays === null) {
         return res.status(400).json({ error: 'فرمت تاریخ تعهد پرداخت نامعتبر است (YYYY/MM/DD)' });
@@ -534,12 +558,13 @@ router.post('/:id/call-outcome', async (req, res) => {
       }
     }
 
+    const promisedDatetime = willPay ? normalizePromisedDatetime(b) : null;
+    const promisedDate = promisedDateFromDatetime(promisedDatetime);
+    const promisedTime = promisedTimeFromDatetime(promisedDatetime);
+
     const isDeath = b.no_payment_reason === 'فوت کاربر';
     const newCallCount = (c.call_count || 0) + 1;
 
-    const stage = computeNegotiatorStage(c.strategy_id) || {};
-    const allowedFrom = stage.allowed_from || '09:00';
-    const allowedTo = stage.allowed_to || '18:00';
     const waitRepeatMinutes = Number(stage.wait_repeat_minutes) || 0;
     const nextActionLabelAfterCall = stage.next_action_label || 'شکست استراتژی';
     const negWindow = { allowed_from: allowedFrom, allowed_to: allowedTo };
@@ -586,27 +611,20 @@ router.post('/:id/call-outcome', async (req, res) => {
       nextAction = nextActionLabelAfterCall;
     } else if (willPay) {
       if (reachedMax) {
-        // آخرین تماس مجاز — تعهد ثبت می‌شود ولی تماس بعدی زمان‌بندی نمی‌شود؛ موتور به اکشن بعدی می‌رود.
         newStatus = 'in_negotiation';
-        nextActionDate = nowDatetime();
+        nextActionDate = jalaliDateTimeToDatetime(promisedDate, promisedTime);
+        if (!nextActionDate) {
+          return res.status(400).json({ error: 'تاریخ/ساعت تعهد پرداخت نامعتبر است' });
+        }
         nextAction = nextActionLabelAfterCall;
       } else {
-        // تصمیم به پرداخت: نوبت بعدی = تاریخ تعهد + ساعت انتخابی (باید در بازه مجاز باشد)
-        if (!b.next_call_time) {
-          return res.status(400).json({ error: 'ساعت تماس بعدی اجباری است' });
+        nextActionDate = jalaliDateTimeToDatetime(promisedDate, promisedTime);
+        if (!nextActionDate) {
+          return res.status(400).json({ error: 'تاریخ/ساعت تعهد پرداخت نامعتبر است' });
         }
-        if (!isTimeWithinAllowedWindow(b.next_call_time, allowedFrom, allowedTo)) {
-          return res
-            .status(400)
-            .json({ error: `ساعت تماس بعدی باید در بازه مجاز (${allowedFrom} تا ${allowedTo}) باشد` });
-        }
-        const combined = jalaliDateTimeToDatetime(b.next_call_date || b.promised_date, b.next_call_time);
-        if (!combined) return res.status(400).json({ error: 'تاریخ/ساعت تماس بعدی نامعتبر است' });
-        nextActionDate = combined;
         nextAction = 'تماس مذاکره‌کننده';
       }
     } else if (reachedMax) {
-      // آخرین تماس مجاز — بدون زمان‌بندی تماس بعدی؛ موتور به اکشن بعدی/شکست استراتژی می‌رود.
       newStatus = 'in_negotiation';
       nextActionDate = nowDatetime();
       nextAction = nextActionLabelAfterCall;
@@ -626,14 +644,19 @@ router.post('/:id/call-outcome', async (req, res) => {
       nextAction = 'تماس مذاکره‌کننده';
     }
 
-    // رشته جلالی «تاریخ ساعت» تماس بعدی که مذاکره‌کننده انتخاب کرده (فقط در حالت پیگیری دستی).
     const scheduledNextCall =
       !isDeath &&
       !b.refer_to_legal &&
       !shouldRetryNegotiator &&
-      Boolean(b.next_call_date) &&
-      Boolean(b.next_call_time);
-    const nextCallJalali = scheduledNextCall ? `${b.next_call_date} ${b.next_call_time}` : null;
+      !reachedMax &&
+      ((willPay && promisedDatetime) ||
+        (Boolean(b.next_call_date) && Boolean(b.next_call_time)));
+    const nextCallJalali =
+      willPay && promisedDatetime
+        ? promisedDatetime
+        : scheduledNextCall
+          ? `${b.next_call_date} ${b.next_call_time}`
+          : null;
 
     let cost = 0;
     if (!isNoAnswer && c.assigned_negotiator_id) {
@@ -648,7 +671,7 @@ router.post('/:id/call-outcome', async (req, res) => {
     const parts = [`وضعیت تماس: ${b.call_status}`];
     if (b.no_payment_reason) parts.push(`دلیل عدم پرداخت: ${b.no_payment_reason}`);
     if (b.payment_decision) parts.push(`تصمیم به پرداخت: ${b.payment_decision}`);
-    if (willPay) parts.push(`تعهد: ${b.promised_amount} ریال در ${b.promised_date}`);
+    if (willPay) parts.push(`تعهد: ${b.promised_amount} ریال در ${promisedDatetime}`);
     if (nextCallJalali) parts.push(`تماس بعدی: ${nextCallJalali}`);
     if (shouldRetryNegotiator)
       parts.push(`تکرار تماس — ${b.call_status} (تلاش ${attemptsMade} از ${maxRepeat})`);
@@ -708,11 +731,12 @@ router.post('/:id/call-outcome', async (req, res) => {
       }
     );
 
-    if (willPay) {
+    if (willPay && promisedDatetime) {
+      run(`DELETE FROM promises WHERE case_id = $id AND status = 'pending'`, { $id: id });
       run(
-        `INSERT INTO promises (case_id, promised_date, amount, status)
-         VALUES ($id, $pd, $amt, 'pending')`,
-        { $id: id, $pd: b.promised_date, $amt: Number(b.promised_amount) }
+        `INSERT INTO promises (case_id, promised_datetime, amount, status)
+         VALUES ($id, $pdt, $amt, 'pending')`,
+        { $id: id, $pdt: promisedDatetime, $amt: Number(b.promised_amount) }
       );
     }
 
@@ -782,7 +806,9 @@ router.post('/:id/call-outcome', async (req, res) => {
       call_status: b.call_status,
       no_payment_reason: b.no_payment_reason || null,
       payment_decision: b.payment_decision || null,
-      promised_date: willPay ? b.promised_date : null,
+      promised_date: willPay ? promisedDate : null,
+      promised_time: willPay ? promisedTime : null,
+      promised_datetime: willPay ? promisedDatetime : null,
       promised_amount: willPay ? Number(b.promised_amount) : null,
       call_duration: callDuration,
       call_cost: cost,

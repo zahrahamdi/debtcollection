@@ -396,7 +396,7 @@ function seed() {
   ];
   for (const p of promises) {
     db.run(
-      `INSERT INTO promises (case_id, promised_date, amount, status) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO promises (case_id, promised_datetime, amount, status) VALUES (?, ?, ?, ?)`,
       p
     );
   }

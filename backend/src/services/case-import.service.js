@@ -8,7 +8,7 @@
 const { query, run } = require('../db/database');
 const { computeCei, applyCeiBoost } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
-const { nowDatetime, nextAllowedStartDatetime, isWithinAllowedWindow, calcActionStatus, isActionDue } = require('../db/dateUtil');
+const { nowDatetime, computeNextActionDateFromWindow, calcActionStatus, isActionDue } = require('../db/dateUtil');
 
 const MAX_ROWS = 1000;
 const REQUIRED_DEBT_CLASS = 'سررسید گذشته';
@@ -207,16 +207,11 @@ function getFirstStrategyAction(strategyId) {
   return rows[0] || null;
 }
 
-/** datetime اقدام بعدی اولیه: الان، مگر خارج از بازه مجاز → فردا از allowed_from */
+/** datetime اقدام بعدی اولیه بر اساس بازه مجاز اولین اکشن استراتژی */
 function computeInitialNextActionDate(strategyId) {
   const first = getFirstStrategyAction(strategyId);
   if (!first) return nowDatetime();
-  if (SMS_OR_AUTOCALL.includes(first.action_type)) {
-    if (!isWithinAllowedWindow(first.allowed_from, first.allowed_to)) {
-      return nextAllowedStartDatetime(first.allowed_from);
-    }
-  }
-  return nowDatetime();
+  return computeNextActionDateFromWindow(first.allowed_from, first.allowed_to);
 }
 
 function firstStrategyActionLabel(strategyId) {

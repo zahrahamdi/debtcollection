@@ -30,34 +30,34 @@ export function formatNumber(value) {
   return toFaDigits(Number(value).toLocaleString('en-US'))
 }
 
-// نمایش تاریخ (در نسخه دمو رشته شمسی از backend می‌آید)
-export function formatDate(value) {
-  if (!value) return '—'
-  return toFaDigits(value)
-}
+const TEHRAN_TZ = 'Asia/Tehran'
 
-const DISPLAY_OFFSET_MS = 3.5 * 60 * 60 * 1000
-
-function applyDisplayOffset(date) {
-  return new Date(date.getTime() + DISPLAY_OFFSET_MS)
-}
-
-/** تاریخ و ساعت شمسی — ورودی: YYYY-MM-DD HH:mm:ss یا YYYY/MM/DD
- *  @param {{ offset?: boolean }} options — offset=false برای ساعت‌های تعریف‌شده در استراتژی (بدون +۳.۵)
- */
-export function formatJalaliDateTime(value, options = {}) {
-  const { offset = true } = options
-  if (!value) return '—'
+function parseToDate(value, { assumeUtc = false } = {}) {
   const en = toEnDigits(String(value).trim())
 
-  const isoMatch = en.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
+  const isoMatch = en.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
   if (isoMatch) {
     const [, y, mo, d, h, mi, sec] = isoMatch
-    const raw = new Date(Number(y), Number(mo) - 1, Number(d), Number(h || 0), Number(mi || 0), Number(sec || 0))
-    const date = offset ? applyDisplayOffset(raw) : raw
-    if (!Number.isNaN(date.getTime())) {
-      return toFaDigits(formatJalaliFn(date, 'yyyy/MM/dd HH:mm'))
-    }
+    const date = assumeUtc
+      ? new Date(
+          Date.UTC(
+            Number(y),
+            Number(mo) - 1,
+            Number(d),
+            Number(h || 0),
+            Number(mi || 0),
+            Number(sec || 0)
+          )
+        )
+      : new Date(
+          Number(y),
+          Number(mo) - 1,
+          Number(d),
+          Number(h || 0),
+          Number(mi || 0),
+          Number(sec || 0)
+        )
+    if (!Number.isNaN(date.getTime())) return date
   }
 
   const jalaliMatch = en.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/)
@@ -65,21 +65,95 @@ export function formatJalaliDateTime(value, options = {}) {
     const [, jy, jmo, jd, h, mi] = jalaliMatch
     const parsed = parseJalaliFn(`${jy}/${jmo}/${jd}`, 'yyyy/MM/dd', new Date())
     if (!Number.isNaN(parsed.getTime())) {
-      if (h !== undefined) {
-        parsed.setHours(Number(h), Number(mi || 0), 0, 0)
-        const adjusted = offset ? applyDisplayOffset(parsed) : parsed
-        return toFaDigits(formatJalaliFn(adjusted, 'yyyy/MM/dd HH:mm'))
-      }
-      return toFaDigits(formatJalaliFn(parsed, 'yyyy/MM/dd'))
+      if (h !== undefined) parsed.setHours(Number(h), Number(mi || 0), 0, 0)
+      return parsed
     }
   }
 
-  return toFaDigits(value)
+  const fallback = new Date(value)
+  if (!Number.isNaN(fallback.getTime())) return fallback
+
+  return null
 }
 
-/** تاریخ اقدام بعدی — بدون جابجایی ۳.۵ ساعته */
+function tehranParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TEHRAN_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+
+  const get = (type) => parts.find((p) => p.type === type)?.value
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')),
+    minute: Number(get('minute')),
+  }
+}
+
+function inputHasTime(value) {
+  const en = toEnDigits(String(value).trim())
+  return /\d{1,2}:\d{2}/.test(en)
+}
+
+/** نمایش literal تاریخ/ساعت جلالی ذخیره‌شده (بدون تبدیل timezone) */
+function formatStoredJalaliDatetime(value) {
+  const en = toEnDigits(String(value).trim())
+  const m = en.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/)
+  if (!m) return null
+  const [, y, mo, d, h, mi] = m
+  const date = `${y}/${String(mo).padStart(2, '0')}/${String(d).padStart(2, '0')}`
+  if (h !== undefined && mi !== undefined) {
+    return toFaDigits(`${date} - ${String(h).padStart(2, '0')}:${mi}`)
+  }
+  return toFaDigits(date)
+}
+
+/** تاریخ و ساعت شمسی با تایم‌زون تهران — فرمت: ۱۴۰۴/۰۶/۰۱ - ۱۴:۳۰
+ *  @param {{ assumeUtc?: boolean }} options — برای created_at دیتابیس (SQLite UTC)
+ */
+export function formatJalaliDateTime(value, options = {}) {
+  const { assumeUtc = false } = options
+  if (!value) return '—'
+
+  if (!assumeUtc) {
+    const stored = formatStoredJalaliDatetime(value)
+    if (stored) return stored
+  }
+
+  const date = parseToDate(value, { assumeUtc })
+  if (!date) return toFaDigits(String(value))
+
+  const { year, month, day, hour, minute } = tehranParts(date)
+  const jalaliDate = formatJalaliFn(new Date(year, month - 1, day), 'yyyy/MM/dd')
+
+  if (inputHasTime(value)) {
+    const hm = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    return toFaDigits(`${jalaliDate} - ${hm}`)
+  }
+
+  return toFaDigits(jalaliDate)
+}
+
+/** زمان ثبت SQLite (datetime('now') — UTC) */
+export function formatSqliteDateTime(value) {
+  return formatJalaliDateTime(value, { assumeUtc: true })
+}
+
+/** تاریخ شمسی — alias برای formatJalaliDateTime */
+export function formatDate(value) {
+  return formatJalaliDateTime(value)
+}
+
+/** تاریخ اقدام بعدی */
 export function formatNextActionDateTime(value) {
-  return formatJalaliDateTime(value, { offset: false })
+  return formatJalaliDateTime(value)
 }
 
 export const jalaliDateTimeStyle = { direction: 'ltr', display: 'inline-block' }

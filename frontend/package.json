@@ -19,6 +19,8 @@
     "react-hook-form": "^7.80.0",
     "react-hot-toast": "^2.6.0",
     "react-router-dom": "^7.18.0",
+    "reactflow": "^11.11.4",
+    "recharts": "^2.15.4",
     "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },

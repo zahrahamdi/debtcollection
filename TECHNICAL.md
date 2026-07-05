@@ -11,12 +11,13 @@
 1. [نمای کلی معماری](#۱-نمای-کلی-معماری)
 2. [Backend — ساختار و لایه‌ها](#۲-backend--ساختار-و-لایه‌ها)
 3. [Frontend — ساختار](#۳-frontend--ساختار)
-4. [موتور استراتژی (Strategy Engine)](#۴-موتور-استراتژی-strategy-engine)
+4. [موتور استرategی (Strategy Engine)](#۴-موتور-استراتژی-strategy-engine)
 5. [جریان‌های اصلی داده](#۵-جریان‌های-اصلی-داده)
 6. [API Reference](#۶-api-reference)
 7. [دیتابیس](#۷-دیتابیس)
 8. [تاریخ، زمان و وضعیت اقدام](#۸-تاریخ-زمان-و-وضعیت-اقدام)
 9. [متغیرهای محیطی و اسکریپت‌ها](#۹-متغیرهای-محیطی-و-اسکریپت‌ها)
+10. [احراز هویت و دسترسی (دمو)](#۱۰-احراز-هویت-و-دسترسی-دمو)
 
 ---
 
@@ -65,6 +66,7 @@ backend/src/
 │   ├── strategyActions.js    # CRUD/validate اقدام‌ها + repeat_on_results
 │   └── lastAction.js         # resolve last_action از case_actions + تخصیص ★
 ├── routes/                   # thin controllers — parse request, call service, JSON response
+│   └── reports.js            # گزارشات: cases, funnel, strategies, negotiators ★
 └── services/                 # business logic
     ├── strategy-engine.service.js   # اجرای خودکار استراتژی ★
     ├── case-import.service.js       # Excel پرونده + pipeline CEI/سگمنت/استراتژی
@@ -119,30 +121,48 @@ backend/src/
 frontend/src/
 ├── main.jsx, App.jsx
 ├── routes/
-│   ├── AppRoutes.jsx         # /cases, /debtors, /strategies, /bulk-operations, …
+│   ├── AppRoutes.jsx         # /cases, /debtors, /strategies, /reports, … (بدون ProtectedRoute)
 │   └── navItems.js           # منوی sidebar + adminOnly
 ├── pages/
 │   ├── Cases.jsx             # جدول پرونده + سایدبار + مدال تماس/تخصیص
 │   ├── Strategies.jsx        # CRUD استراتژی + AbTestModal + normalizeStrategyAction
-│   ├── BulkOperations.jsx    # آپلود Excel
-│   ├── Reports.jsx           # گزارش خلاصه + نرخ تبدیل + A/B
+│   ├── BulkOperations.jsx    # آپلود Excel — guard admin
+│   ├── Reports.jsx           # گزارشات: ۳ تب (cases / strategies / negotiators) ★
 │   ├── History.jsx           # Audit Trail سراسری
 │   ├── Debtors.jsx           # لیست بدهکاران
 │   ├── Installments.jsx      # اقساط
 │   ├── Negotiators.jsx       # مذاکره‌کنندگان
 │   └── AdminPanel.jsx        # CEI، سگمنت، تنظیمات، …
 ├── components/
+│   ├── charts/               # Recharts — chartUtils, ActionDistributionPieChart, CostByActionChart ★
+│   ├── reports/              # FunnelFlowChart (React Flow) ★
 │   ├── table/                # CasesTable, CasesFilters, Badge
 │   ├── sidebar/              # CaseDetailSidebar, DebtorDetailSidebar
 │   ├── modal/                # CallOutcomeModal, AssignModal
 │   └── admin/                # StrategyActionsBuilder (RepeatResultsMultiSelect), …
-├── api/                      # axios wrappers — یک فایل per domain
+├── api/
+│   ├── client.js             # axios — بدون Authorization header
+│   └── reports.js            # fetchCasesReport, fetchFunnelReport, …
 └── utils/
-    ├── constants.js          # CASE_STATUS (۱۵), ACTION_TYPE, HISTORY_OPERATIONS, normalizeLastActionLabel
+    ├── constants.js          # CASE_STATUS (۱۵), ACTION_TYPE, HISTORY_OPERATIONS
     ├── format.js             # formatRial, toFaDigits, formatDate
     ├── historyDetails.js     # فرمت جزئیات case_history برای UI
-    └── auth.js               # currentUser mock (admin / negotiator)
+    └── auth.js               # currentUser mock + isAdmin() ★
 ```
+
+**نمودارها (Recharts):** کانتینر LTR (`ChartContainer`) برای جلوگیری از clip در RTL؛ محور عددی با ارقام لاتین؛ برچسب فارسی با `foreignObject`. رنگ ثابت اقدامات در `actionPieConfig.js`.
+
+**صفحه گزارشات (`Reports.jsx`):**
+
+| تب | محتوا | API |
+|----|--------|-----|
+| پرونده‌ها | KPI، bar وضعیت، line روند | `GET /reports/cases` |
+| استراتژی‌ها → عملکرد | جدول + مقایسه A/B | `GET /reports/strategies/performance` |
+| استراتژی‌ها → هزینه/وصول | pie توزیع، bar اقدام، جدول | `GET /reports/strategies/cost` |
+| استراتژی‌ها → Funnel | React Flow | `GET /reports/funnel` |
+| مذاکره‌کنندگان | جدول + pie دلایل عدم پرداخت | `GET /reports/negotiators` |
+
+هر تب فیلتر مستقل دارد (بازه شمسی، نوع اعتبار، …). دسترسی: `isAdmin()` — در غیر این صورت `<Navigate to="/cases" />`.
 
 **اتصال API:** `frontend/src/api/client.js` → `baseURL: http://localhost:3000/api`
 
@@ -438,11 +458,22 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 ### Reports — `/reports`
 
-| Method | Path | Query | توضیح |
-|--------|------|-------|--------|
-| GET | `/summary` | `credit_type?`, `from_date?`, `to_date?` | خلاصه وضعیت (۱۵ وضعیت) و وصول |
-| GET | `/action-conversion` | filters | نرخ تبدیل اقدام‌ها |
-| GET | `/ab-tests` | filters | گزارش A/B |
+| Method | Path | Query (نمونه) | توضیح |
+|--------|------|---------------|--------|
+| GET | `/cases` | `from_date`, `to_date`, `credit_type`, `segment_id`, `province` | KPI پرونده، `cases_by_status`, `daily_trend` (فقط پرداخت کامل) |
+| GET | `/funnel` | `credit_type` (اجباری), `from_date`, `to_date`, `strategy_id`, `segment_id` | مراحل funnel + خروجی‌های paid/partial/failure |
+| GET | `/strategies/performance` | فیلتر تاریخ اقدام + اعتبار/سگمنت/استراتژی | جدول استراتژی + مقایسه A/B |
+| GET | `/strategies/cost` | فیلتر تاریخ اقدام | `action_stats`, `cost_distribution`, `collection_distribution` |
+| GET | `/negotiators` | `negotiator_id`, `cooperation_type` | `negotiators_comparison`, `no_payment_reasons` |
+| GET | `/meta` | — | استان‌ها و متادیتا |
+| GET | `/summary` | — | **deprecated** — استفاده از `/cases` |
+| GET | `/action-conversion` | — | **deprecated** |
+| GET | `/ab-tests` | — | **deprecated** — داخل `/strategies/performance` |
+
+**نکات محاسباتی:**
+- `cost_to_collection_ratio` = `total_cost / total_collected` (عدد اعشاری، نه درصد)
+- Funnel: تشخیص خروجی هر مرحله با `firstOutcomeAfterAction` و پرداخت/شکست استراتژی
+- `success_rate` مذاکره‌کننده = `paid_cases / total_cases × 100`
 
 ### Google Sheet — `/gsheet`
 
@@ -468,9 +499,11 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 | `case_history` | Audit Trail |
 | `promises` | تعهد پرداخت (PTP) |
 | `installments`, `payments` | اقساط و پرداخت |
-| `negotiators` | مذاکره‌کنندگان |
-| `cei_formulas`, `settings`, `settings_history` | پیکربندی |
-| `bulk_operations` | لاگ آپلودهای گروهی |
+| `negotiators` | موجودیت کسب‌وکار مذاکره‌کننده (**نه** حساب login) |
+| `cei_formulas`, `settings`, `settings_history` | پیکربندی + `user_name` audit |
+| `bulk_operations` | لاگ آپلودهای گروهی + `user_name` |
+
+**جداول وجود ندارد:** `users`, `roles`, `permissions`, `sessions` — برای production باید اضافه شوند.
 
 ### فیلدهای مهم `cases`
 
@@ -552,16 +585,73 @@ cost, avg_call_duration
 
 لیست کامل: آرایه `HISTORY_OPERATIONS` در `constants.js` (۳۲+ عملیات).
 
+---
+
+## ۱۰. احراز هویت و دسترسی (دemo)
+
+### ۱۰.۱ وضعیت فعلی
+
+| قابلیت | پیاده‌سازی |
+|--------|------------|
+| Login / Register | **ندارد** |
+| JWT / Session / Cookie | **ندارد** |
+| Backend auth middleware | **ندارد** |
+| جدول users/roles | **ندارد** |
+| SSO (production) | **برنامه‌ریزی شده** — PRD §۱۰.۴ |
+
+### ۱۰.۲ Mock فرانت (`frontend/src/utils/auth.js`)
+
+```javascript
+export const currentUser = {
+  name: 'زهرا حمیدی',
+  role: 'admin', // admin | negotiator
+  // negotiatorId: 1  — برای تست نقش مذاکره‌کننده
+}
+export const isAdmin = () => currentUser.role === 'admin'
+```
+
+### ۱۰.۳ معماری کنترل دسترسی (UI-only)
+
+```
+auth.js (mock)
+    ├── Sidebar — navItems.filter(adminOnly)
+    ├── Reports.jsx, BulkOperations.jsx — Navigate guard
+    ├── Cases / Strategies / Negotiators — دکمه‌های admin
+    ├── RowActionsMenu — تخصیص فقط admin
+    └── CaseDetailSidebar — canUserRegisterCall()
+            admin → همه
+            negotiator → assigned_negotiator_id === negotiatorId
+```
+
+**مسیرها در `AppRoutes.jsx` محافظت نشده‌اند** — دسترسی مستقیم URL به `/admin` یا `/reports` ممکن است (guard فقط داخل بعضی صفحات).
+
+### ۱۰.۴ Audit بدون هویت واقعی
+
+Backend فیلد `user_name` را از body/query می‌گیرد (مثلاً `POST /cases/:id/assign`, bulk upload, settings). fallback: `'ادمین'` / `'مذاکره‌کننده'`. **قابل جعل** — تا پیاده‌سازی auth واقعی.
+
+### ۱۰.۵ نقش‌ها (PRD §۳)
+
+| نقش | `role` | دسترسی خلاصه |
+|-----|--------|--------------|
+| ادمین وصول | `admin` | همه صفحات + bulk + گزارشات + ادمین پنل |
+| مذاکره‌کننده | `negotiator` | بدهکاران، پرونده‌ها، اقساط، تاریخچه؛ تماس فقط پرونده خود |
+
+جدول کامل: [PRD-DigiPay.md §۳.۳](./PRD-DigiPay.md#۳۳-جدول-دسترسیها).
+
+### ۱۰.۶ مسیر پیشنهادی production
+
+1. جدول `users` (`id`, `email`, `password_hash`, `role`, `negotiator_id` nullable)
+2. `POST /api/auth/login` → JWT
+3. Express middleware `requireAuth` + `requireRole('admin')`
+4. `ProtectedRoute` در React + ذخیره token
+5. حذف mock از `auth.js`؛ `user_name` از `req.user` سرور
+
+---
+
 ### Frontend — `normalizeLastActionLabel`
 
 `constants.js` — تبدیل legacy «تماس تلفنی مذاکره‌کننده» → «تماس مذاکره‌کننده» در `CasesTable` و `CaseDetailSidebar`.
 
 ---
 
-### احراز هویت (دمو)
-
-فقط mock در `frontend/src/utils/auth.js` — backend middleware واقعی ندارد.
-
----
-
-*آخرین به‌روزرسانی: `lastAction.js` · resolve `last_action` از `case_actions` · تخصیص · نام واحد «تماس مذاکره‌کننده» · PRD ۵.۱۱*
+*آخرین به‌روزرسانی: گزارشات (Reports API + Recharts/React Flow) · احراز هویت mock · PRD §۱۰*

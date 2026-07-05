@@ -137,6 +137,67 @@ function migrateSchema(database) {
       database.run('ALTER TABLE case_actions ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 0');
       console.log('[db] migration: case_actions.repeat_count added');
     }
+    if (!actionCols.includes('created_at')) {
+      database.run('ALTER TABLE case_actions ADD COLUMN created_at TEXT');
+      const maxRow = database.exec('SELECT MAX(id) AS max_id FROM case_actions');
+      const maxId = maxRow[0]?.values[0]?.[0] ?? 0;
+      database.run(
+        `UPDATE case_actions SET created_at = datetime('now', '-' || (${maxId} - id) || ' seconds')`
+      );
+      console.log('[db] migration: case_actions.created_at added');
+    }
+  }
+
+  const promisesInfo = database.exec('PRAGMA table_info(promises)');
+  if (promisesInfo.length) {
+    const promiseCols = promisesInfo[0].values.map((row) => row[1]);
+    if (promiseCols.includes('promised_date') && !promiseCols.includes('promised_datetime')) {
+      database.run('ALTER TABLE promises RENAME COLUMN promised_date TO promised_datetime');
+      database.run(
+        `UPDATE promises SET promised_datetime = promised_datetime || ' 23:59'
+         WHERE promised_datetime NOT LIKE '% %'`
+      );
+      console.log('[db] migration: promises.promised_date → promised_datetime');
+    }
+
+    repairPromisedDatetimeFromHistory(database);
+  }
+}
+
+/** تعهدات pending با 23:59 پیش‌فرض migration — بازیابی از تاریخچه ثبت تماس */
+function repairPromisedDatetimeFromHistory(database) {
+  const rows = database.exec(
+    `SELECT p.id, p.case_id FROM promises p
+     WHERE p.status = 'pending' AND p.promised_datetime LIKE '% 23:59'`
+  );
+  if (!rows.length || !rows[0].values.length) return;
+
+  for (const [promiseId, caseId] of rows[0].values) {
+    const hist = database.exec(
+      `SELECT details FROM case_history
+       WHERE case_id = ${caseId} AND operation = 'ثبت خروجی تماس'
+       ORDER BY id DESC LIMIT 1`
+    );
+    if (!hist.length || !hist[0].values.length) continue;
+
+    const detailsRaw = hist[0].values[0][0];
+    if (!detailsRaw) continue;
+
+    let details;
+    try {
+      details = JSON.parse(detailsRaw);
+    } catch {
+      continue;
+    }
+
+    const candidate = details.promised_datetime || null;
+    if (!candidate || String(candidate).includes('23:59')) continue;
+
+    const escaped = String(candidate).replace(/'/g, "''");
+    database.run(
+      `UPDATE promises SET promised_datetime = '${escaped}' WHERE id = ${promiseId}`
+    );
+    console.log(`[db] repair: promise ${promiseId} → ${candidate}`);
   }
 }
 

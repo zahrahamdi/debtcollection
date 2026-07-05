@@ -6,10 +6,10 @@ const {
   nowJalaliDateTime,
   nowDatetime,
   computeNextActionDate,
+  computeNextActionDateFromWindow,
   isActionDue,
   isWithinAllowedWindow,
   calcActionStatus,
-  nextAllowedStartDatetime,
   addMinutesFromNow,
 } = require('../db/dateUtil');
 const { computeCei } = require('../db/cei');
@@ -37,6 +37,23 @@ const ACTION_LABELS = {
   threatening_autocall: 'تماس خودکار تهدید',
   negotiator_call: 'تماس مذاکره‌کننده',
 };
+
+const AUTOMATED_HISTORY_OPS = {
+  warning_sms: 'ارسال پیامک هشدار',
+  threatening_sms: 'ارسال پیامک تهدید',
+  warning_autocall: 'تماس خودکار هشدار',
+  threatening_autocall: 'تماس خودکار تهدید',
+};
+
+function automatedHistoryOperation(actionType, isRetry = false) {
+  const base = AUTOMATED_HISTORY_OPS[actionType];
+  if (!base) {
+    const isSms = SMS_TYPES.includes(actionType);
+    if (isRetry) return isSms ? 'ارسال ناموفق پیامک — تلاش مجدد' : 'تماس خودکار ناموفق — تلاش مجدد';
+    return isSms ? 'اجرای پیامک' : 'اجرای تماس خودکار';
+  }
+  return isRetry ? `${base} — تلاش مجدد` : base;
+}
 
 // نتایج شبیه‌سازی‌شده (Mock) پیامک — weighted random پس از ارسال واقعی/شبیه‌سازی‌شده.
 const SMS_OUTCOMES = [
@@ -305,7 +322,7 @@ function advanceAfterAutomatedOutcome(caseRow, action, kind, ctx) {
     attemptsMade,
   } = ctx;
   const resultStatus = kind === 'sms' ? 'pending_sms_result' : 'pending_autocall_result';
-  const okHistoryOp = kind === 'sms' ? 'اجرای پیامک' : 'اجرای تماس خودکار';
+  const okHistoryOp = automatedHistoryOperation(action.action_type, false);
   const nextObj = getNextStrategyActionAfter(caseRow.strategy_id, action.seq);
   const nextActionDate = nextObj ? computeNextActionDate(waitNext, nextObj) : addMinutesFromNow(waitNext);
   const nextLabel = nextObj ? ACTION_LABELS[nextObj.action_type] || nextObj.action_type : 'شکست استراتژی';
@@ -347,8 +364,7 @@ function executeAutomatedAction(caseRow, action, kind, picked) {
   const attemptsMade = attemptsBefore + 1;
 
   const retryStatus = kind === 'sms' ? 'pending_sms_retry' : 'pending_autocall_retry';
-  const failHistoryOp =
-    kind === 'sms' ? 'ارسال ناموفق پیامک — تلاش مجدد' : 'تماس خودکار ناموفق — تلاش مجدد';
+  const failHistoryOp = automatedHistoryOperation(action.action_type, true);
 
   const repeatOn = parseRepeatOnResults(action);
   const inRepeatList = repeatOn.includes(outcome);
@@ -420,7 +436,7 @@ function executeAutomatedAction(caseRow, action, kind, picked) {
 
 async function executeSmsAction(caseRow, action) {
   if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
-    const nad = nextAllowedStartDatetime(action.allowed_from);
+    const nad = computeNextActionDateFromWindow(action.allowed_from, action.allowed_to);
     updateCaseFields(caseRow.id, { next_action_date: nad, action_status: calcActionStatus(nad) });
     return { skipped: true, reason: 'outside_time_window' };
   }
@@ -448,7 +464,7 @@ async function executeSmsAction(caseRow, action) {
 
 async function executeAutocallAction(caseRow, action) {
   if (!isWithinAllowedWindow(action.allowed_from, action.allowed_to)) {
-    const nad = nextAllowedStartDatetime(action.allowed_from);
+    const nad = computeNextActionDateFromWindow(action.allowed_from, action.allowed_to);
     updateCaseFields(caseRow.id, { next_action_date: nad, action_status: calcActionStatus(nad) });
     return { skipped: true, reason: 'outside_time_window' };
   }
@@ -622,13 +638,7 @@ function firstStrategyActionLabel(strategyId) {
 function computeInitialNextActionDate(strategyId) {
   const first = getFirstStrategyAction(strategyId);
   if (!first) return nowDatetime();
-  const smsAuto = [...SMS_TYPES, ...AUTOCALL_TYPES];
-  if (smsAuto.includes(first.action_type)) {
-    if (!isWithinAllowedWindow(first.allowed_from, first.allowed_to)) {
-      return nextAllowedStartDatetime(first.allowed_from);
-    }
-  }
-  return nowDatetime();
+  return computeNextActionDateFromWindow(first.allowed_from, first.allowed_to);
 }
 
 function recordStrategyFailureMarker(caseId, failedStrategyTitle) {

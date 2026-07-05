@@ -1,6 +1,6 @@
 import Badge from './Badge'
 import RowActionsMenu from './RowActionsMenu'
-import { formatRial, formatNextActionDateTime, jalaliDateTimeStyle, formatMobile, orDash, toFaDigits } from '../../utils/format'
+import { formatRial, formatJalaliDateTime, jalaliDateTimeStyle, formatMobile, orDash, toFaDigits } from '../../utils/format'
 import {
   caseStatusLabel,
   caseStatusTone,
@@ -109,7 +109,7 @@ export default function CasesTable({
                   </td>
                   <td className={`${cell} text-slate-600`}>{orDash(row.next_action)}</td>
                   <td className={`${cell} text-slate-600`}>
-                    <span style={jalaliDateTimeStyle}>{formatNextActionDateTime(row.next_action_date)}</span>
+                    <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(row.next_action_date)}</span>
                   </td>
                   <td className={cell}>
                     <Badge tone={actionStatusTone(row.action_status)}>

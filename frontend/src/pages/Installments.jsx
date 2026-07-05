@@ -4,7 +4,7 @@ import { Filter, Search, X, ChevronRight } from 'lucide-react'
 import Badge from '../components/table/Badge'
 import { fetchCaseInstallments } from '../api/cases'
 import {
-  formatDate,
+  formatJalaliDateTime,
   formatRial,
   jalaliDateTimeStyle,
   orDash,
@@ -231,7 +231,7 @@ export default function Installments() {
                 >
                   <td className={cell}>{toFaDigits(orDash(row.installment_number))}</td>
                   <td className={cell}>
-                    <span style={jalaliDateTimeStyle}>{formatDate(row.due_date)}</span>
+                    <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(row.due_date)}</span>
                   </td>
                   <td className={cell}>{formatRial(row.amount)}</td>
                   <td className={cell}>{formatRial(row.penalty_balance)}</td>
@@ -241,7 +241,7 @@ export default function Installments() {
                   <td className={cell}>{formatRial(row.bank_settlement)}</td>
                   <td className={cell}>{formatRial(row.guarantee_withdrawal)}</td>
                   <td className={cell}>
-                    <span style={jalaliDateTimeStyle}>{formatDate(row.payment_date)}</span>
+                    <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(row.payment_date)}</span>
                   </td>
                   <td className={cell}>
                     {row.payment_status ? (

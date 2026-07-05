@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Save, FlaskConical, History as HistoryIcon } from 'lucide-react'
+import { Save, FlaskConical, History as HistoryIcon, CircleHelp } from 'lucide-react'
 import { fetchCeiFormulas, updateCeiFormula, testCeiFormula } from '../../api/cei'
 import { currentUser } from '../../utils/auth'
 import { toFaDigits, formatRial } from '../../utils/format'
@@ -73,6 +73,7 @@ export default function CeiSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [boostGuideOpen, setBoostGuideOpen] = useState(false)
   const [error, setError] = useState('')
 
   // بخش تست فرمول
@@ -209,39 +210,14 @@ export default function CeiSettings() {
       </div>
       <FormulaBox tab={tab} />
 
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
-        <h4 className="mb-3 text-sm font-bold text-slate-700">منطق شکست استراتژی</h4>
-        <p className="text-sm leading-7 text-slate-600">
-          وقتی استراتژی یک پرونده بدون پرداخت به پایان می‌رسد و پرونده در آخرین سگمنت نیست،
-          سیستم به صورت خودکار CEI پرونده را افزایش می‌دهد تا به سگمنت بالاتر منتقل شود.
-        </p>
-        <div className="mt-4 space-y-2 text-sm text-slate-600">
-          <p className="font-medium text-slate-700">فرمول محاسبه:</p>
-          <p dir="ltr" className="rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">
-            position_ratio = (CEI - min_current) / (max_current - min_current)
-          </p>
-          <p dir="ltr" className="rounded-lg bg-white px-3 py-2 font-mono text-xs text-slate-700">
-            CEI_target = min_next + position_ratio × (max_next - min_next)
-          </p>
-          <p className="text-xs text-slate-500">به فارسی:</p>
-          <p>موقعیت نسبی = (CEI فعلی − حداقل سگمنت) / (حداکثر سگمنت − حداقل سگمنت)</p>
-          <p>CEI هدف = حداقل سگمنت بعدی + موقعیت نسبی × (حداکثر سگمنت بعدی − حداقل سگمنت بعدی)</p>
-        </div>
-        <div className="mt-4 space-y-2 text-sm text-slate-600">
-          <p className="font-medium text-slate-700">مثال با سگمنت‌های ۰–۳۰ و ۳۰–۵۰:</p>
-          <p>پرونده با CEI = ۱۰ → موقعیت نسبی = ۰.۳۳ → CEI هدف = ۳۶.۶</p>
-          <p>پرونده با CEI = ۲۰ → موقعیت نسبی = ۰.۶۷ → CEI هدف = ۴۳.۴</p>
-          <p className="text-xs text-slate-500">
-            هر دو به سگمنت ۳۰–۵۰ منتقل می‌شوند و ترتیب نسبی حفظ می‌شود.
-          </p>
-        </div>
-        <ul className="mt-4 list-inside list-disc space-y-1 text-xs text-slate-500">
-          <li>پرداخت جزئی تأثیری روی boost ندارد</li>
-          <li>افزایش مطالبات تأثیری روی boost ندارد</li>
-          <li>boost هیچوقت کاهش نمی‌یابد</li>
-          <li>اگر پرونده در آخرین سگمنت باشد، مستقیم به حقوقی می‌رود</li>
-        </ul>
-      </div>
+      <button
+        type="button"
+        onClick={() => setBoostGuideOpen(true)}
+        className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700"
+      >
+        <CircleHelp className="h-3.5 w-3.5 shrink-0" />
+        منطق محاسبه CEI پس از شکست استراتژی
+      </button>
 
       {/* پارامترها */}
       <div className="mt-5 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-panel sm:grid-cols-2">
@@ -386,6 +362,95 @@ export default function CeiSettings() {
           </table>
         </div>
       </div>
+
+      <Modal
+        open={boostGuideOpen}
+        onClose={() => setBoostGuideOpen(false)}
+        title="منطق محاسبه CEI پس از شکست استراتژی"
+        maxWidth="max-w-2xl"
+        footer={
+          <button
+            type="button"
+            onClick={() => setBoostGuideOpen(false)}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            بستن
+          </button>
+        }
+      >
+        <div className="space-y-5 text-sm leading-7 text-slate-600">
+          <div>
+            <p>
+              وقتی استراتژی یک پرونده بدون پرداخت به پایان می‌رسد و پرونده در آخرین سگمنت نیست،
+              سیستم به صورت خودکار مقدار افزایش CEI (boost) را محاسبه می‌کند تا پرونده به سگمنت
+              بالاتر منتقل شود.
+            </p>
+            <p className="mt-2">
+              boost یعنی: مقدار عددی که به CEI محاسبه‌شده پرونده اضافه می‌شود تا CEI نهایی پرونده
+              در بازه سگمنت بالاتر قرار بگیرد. این مقدار روی پرونده ذخیره می‌شود و در محاسبه‌های
+              بعدی هم اعمال می‌شود.
+            </p>
+          </div>
+
+          <div>
+            <p className="mb-2 font-medium text-slate-700">فرمول</p>
+            <div className="space-y-2 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <p>
+                موقعیت نسبی = (CEI فعلی − حداقل سگمنت فعلی) / (حداکثر سگمنت فعلی − حداقل سگمنت
+                فعلی)
+              </p>
+              <p>
+                CEI هدف = حداقل سگمنت بعدی + موقعیت نسبی × (حداکثر سگمنت بعدی − حداقل سگمنت
+                بعدی)
+              </p>
+              <p>boost = CEI هدف − CEI فعلی</p>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 font-medium text-slate-700">مثال</p>
+            <p className="mb-3 text-slate-600">سگمنت‌ها: سبک (۰ تا ۳۰) / متوسط (۳۰ تا ۵۰)</p>
+            <div className="space-y-4 rounded-xl bg-slate-50 px-4 py-3 font-mono text-xs leading-6 text-slate-700">
+              <div>
+                <p className="mb-1 font-sans text-sm font-medium text-slate-700">
+                  پرونده اول با CEI = ۱۰:
+                </p>
+                <p>موقعیت نسبی = (۱۰−۰) / (۳۰−۰) = ۰.۳۳</p>
+                <p>CEI هدف = ۳۰ + ۰.۳۳ × (۵۰−۳۰) = ۳۶.۶</p>
+                <p>boost = ۲۶.۶</p>
+                <p className="mt-1 font-sans text-slate-600">
+                  نتیجه: پرونده به سگمنت متوسط منتقل می‌شود با CEI = ۳۶.۶
+                </p>
+              </div>
+              <div>
+                <p className="mb-1 font-sans text-sm font-medium text-slate-700">
+                  پرونده دوم با CEI = ۲۰:
+                </p>
+                <p>موقعیت نسبی = (۲۰−۰) / (۳۰−۰) = ۰.۶۷</p>
+                <p>CEI هدف = ۳۰ + ۰.۶۷ × (۵۰−۳۰) = ۴۳.۴</p>
+                <p>boost = ۲۳.۴</p>
+                <p className="mt-1 font-sans text-slate-600">
+                  نتیجه: پرونده به سگمنت متوسط منتقل می‌شود با CEI = ۴۳.۴
+                </p>
+              </div>
+            </div>
+            <p className="mt-3 text-slate-600">
+              هر دو پرونده به سگمنت بالاتر رفتند و ترتیب نسبی آن‌ها حفظ شد.
+            </p>
+          </div>
+
+          <div>
+            <p className="mb-2 font-medium text-slate-700">نکات مهم</p>
+            <ul className="list-inside list-disc space-y-1 text-slate-600">
+              <li>boost فقط در صورت شکست استراتژی به CEI اضافه می‌شود</li>
+              <li>پرداخت جزئی تأثیری روی boost ندارد</li>
+              <li>افزایش مطالبات تأثیری روی boost ندارد</li>
+              <li>boost هیچوقت کاهش نمی‌یابد و روی پرونده ذخیره می‌ماند</li>
+              <li>اگر پرونده در آخرین سگمنت باشد، مستقیم به حقوقی می‌رود</li>
+            </ul>
+          </div>
+        </div>
+      </Modal>
 
       {/* مدال تأیید */}
       <Modal

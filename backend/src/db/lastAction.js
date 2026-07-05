@@ -22,6 +22,11 @@ function actionTypeToLabel(actionType) {
   return ACTION_TYPE_LABELS[actionType] || actionType;
 }
 
+function isTimestampAfter(a, b) {
+  if (!a || !b) return false;
+  return String(a) > String(b);
+}
+
 /** آخرین اقدام اجراشده برای یک پرونده (case_actions + تخصیص) */
 function resolveLastAction(caseId) {
   const map = buildLastActionMap([caseId]);
@@ -30,7 +35,7 @@ function resolveLastAction(caseId) {
 
 /**
  * نقشه caseId → { last_action, last_action_date }
- * - آخرین رکورد case_actions
+ * - آخرین رکورد case_actions (بر اساس created_at)
  * - اگر آخرین «تخصیص به مذاکره‌کننده» در history جدیدتر از آخرین case_action باشد → تخصیص
  */
 function buildLastActionMap(caseIds) {
@@ -44,26 +49,22 @@ function buildLastActionMap(caseIds) {
   const params = Object.fromEntries(idList.map((id, i) => [`$id${i}`, id]));
 
   const execRows = query(
-    `SELECT ca.case_id, ca.id, ca.action_type, ca.action_date
-     FROM case_actions ca
-     INNER JOIN (
-       SELECT case_id, MAX(id) AS max_id
+    `SELECT case_id, action_type, action_date, created_at FROM (
+       SELECT case_id, action_type, action_date, created_at,
+              ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY created_at DESC, id DESC) AS rn
        FROM case_actions
        WHERE case_id IN (${placeholders})
-       GROUP BY case_id
-     ) latest ON ca.id = latest.max_id`,
+     ) ranked WHERE rn = 1`,
     params
   );
 
   const assignRows = query(
-    `SELECT ch.case_id, ch.id, ch.created_at
-     FROM case_history ch
-     INNER JOIN (
-       SELECT case_id, MAX(id) AS max_id
+    `SELECT case_id, created_at FROM (
+       SELECT case_id, created_at,
+              ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY created_at DESC, id DESC) AS rn
        FROM case_history
        WHERE case_id IN (${placeholders}) AND operation = $op
-       GROUP BY case_id
-     ) latest ON ch.id = latest.max_id`,
+     ) ranked WHERE rn = 1`,
     { ...params, $op: ASSIGN_OPERATION }
   );
 
@@ -80,7 +81,19 @@ function buildLastActionMap(caseIds) {
     const exec = execByCase[caseId];
     const assign = assignByCase[caseId];
 
-    if (assign && (!exec || assign.id > exec.id)) {
+    if (!assign) {
+      if (exec) {
+        result[caseId] = {
+          last_action: actionTypeToLabel(exec.action_type),
+          last_action_date: exec.action_date || null,
+        };
+      } else {
+        result[caseId] = { last_action: null, last_action_date: null };
+      }
+      continue;
+    }
+
+    if (!exec) {
       result[caseId] = {
         last_action: ASSIGN_OPERATION,
         last_action_date: dateByCase[caseId] || todayJalali(),
@@ -88,15 +101,17 @@ function buildLastActionMap(caseIds) {
       continue;
     }
 
-    if (exec) {
+    if (isTimestampAfter(assign.created_at, exec.created_at)) {
+      result[caseId] = {
+        last_action: ASSIGN_OPERATION,
+        last_action_date: dateByCase[caseId] || todayJalali(),
+      };
+    } else {
       result[caseId] = {
         last_action: actionTypeToLabel(exec.action_type),
         last_action_date: exec.action_date || null,
       };
-      continue;
     }
-
-    result[caseId] = { last_action: null, last_action_date: null };
   }
 
   return result;
