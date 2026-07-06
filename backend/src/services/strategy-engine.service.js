@@ -1,9 +1,9 @@
 'use strict';
 
 const { query, run: dbRun } = require('../db/database');
+const { insertCaseEvent, insertActionEvent, insertHistoryEvent, maxActionSeq } = require('../db/caseEvents');
 const {
   todayJalali,
-  nowJalaliDateTime,
   nowDatetime,
   computeNextActionDate,
   computeNextActionDateFromWindow,
@@ -16,7 +16,8 @@ const { computeCei } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
 const { sendSms, replacePlaceholders } = require('./sms.service');
 const { processDuePartialPaymentResumes } = require('./payment-import.service');
-const { parseRepeatOnResults } = require('../db/strategyActions');
+const { processDeferredCeiStrategyShifts } = require('./case-import.service');
+const { effectiveRepeatOnResults } = require('../db/strategyActions');
 
 const ELIGIBLE_STATUSES = [
   'pending_strategy_start',
@@ -45,14 +46,25 @@ const AUTOMATED_HISTORY_OPS = {
   threatening_autocall: 'تماس خودکار تهدید',
 };
 
+const AUTOMATED_FAILURE_OPS = {
+  warning_sms: 'ارسال ناموفق پیامک هشدار',
+  threatening_sms: 'ارسال ناموفق پیامک تهدید',
+  warning_autocall: 'تماس خودکار ناموفق هشدار',
+  threatening_autocall: 'تماس خودکار ناموفق تهدید',
+};
+
 function automatedHistoryOperation(actionType, isRetry = false) {
+  if (isRetry) {
+    return (
+      AUTOMATED_FAILURE_OPS[actionType] ||
+      (SMS_TYPES.includes(actionType) ? 'ارسال ناموفق پیامک' : 'تماس خودکار ناموفق')
+    );
+  }
   const base = AUTOMATED_HISTORY_OPS[actionType];
   if (!base) {
-    const isSms = SMS_TYPES.includes(actionType);
-    if (isRetry) return isSms ? 'ارسال ناموفق پیامک — تلاش مجدد' : 'تماس خودکار ناموفق — تلاش مجدد';
-    return isSms ? 'اجرای پیامک' : 'اجرای تماس خودکار';
+    return SMS_TYPES.includes(actionType) ? 'اجرای پیامک' : 'اجرای تماس خودکار';
   }
-  return isRetry ? `${base} — تلاش مجدد` : base;
+  return base;
 }
 
 // نتایج شبیه‌سازی‌شده (Mock) پیامک — weighted random پس از ارسال واقعی/شبیه‌سازی‌شده.
@@ -93,19 +105,15 @@ function weightedPick(list) {
 }
 
 function insertCaseHistory(caseId, debtorId, operation, caseRow, details) {
-dbRun(
-    `INSERT INTO case_history (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-     VALUES ($cid, $did, 'سیستم', $op, $st, $na, $nad, $det)`,
-    {
-      $cid: caseId,
-      $did: debtorId,
-      $op: operation,
-      $st: caseRow.case_status ?? null,
-      $na: caseRow.next_action ?? null,
-      $nad: caseRow.next_action_date ?? null,
-      $det: typeof details === 'string' ? details : JSON.stringify(details),
-    }
-  );
+  insertHistoryEvent({
+    case_id: caseId,
+    operation,
+    user_name: 'سیستم',
+    case_status: caseRow.case_status ?? null,
+    next_action: caseRow.next_action ?? null,
+    next_action_date: caseRow.next_action_date ?? null,
+    details: typeof details === 'string' ? details : JSON.stringify(details),
+  });
 }
 
 function getStrategyActionBySeq(strategyId, seq) {
@@ -135,26 +143,39 @@ function updateCaseFields(caseId, fields) {
 dbRun(`UPDATE cases SET ${sets.join(', ')} WHERE id = $id`, params);
 }
 
-function recordCaseAction(caseId, action, bodyText, result, cost, repeatCount = 0) {
-  // seq به‌صورت running-max ثبت می‌شود (ترتیب زمانی درج) تا سابقه به ترتیب صحیح نمایش داده شود.
-  const maxSeq = query(
-    'SELECT COALESCE(MAX(seq), 0) AS m FROM case_actions WHERE case_id = $id',
-    { $id: caseId }
-  )[0].m;
-  dbRun(
-    `INSERT INTO case_actions (case_id, seq, action_type, body_text, result, action_date, cost, repeat_count)
-     VALUES ($cid, $seq, $type, $body, $result, $date, $cost, $rep)`,
-    {
-      $cid: caseId,
-      $seq: maxSeq + 1,
-      $type: action.action_type,
-      $body: bodyText,
-      $result: result,
-      $date: nowJalaliDateTime(),
-      $cost: cost,
-      $rep: repeatCount,
-    }
-  );
+function logAutomatedStrategyAction(caseId, {
+  operation,
+  action,
+  caseSnapshot,
+  bodyText,
+  result,
+  cost = 0,
+  attempt = 0,
+  maxRepeat = null,
+  extra = {},
+}) {
+  insertCaseEvent({
+    case_id: caseId,
+    event_type: 'action',
+    action_type: action.action_type,
+    label: operation,
+    result,
+    details: JSON.stringify({
+      body_text: bodyText,
+      action_type: action.action_type,
+      result,
+      attempt,
+      max_repeat: maxRepeat,
+      cost,
+      ...extra,
+    }),
+    case_status: caseSnapshot.case_status ?? null,
+    next_action: caseSnapshot.next_action ?? null,
+    next_action_date: caseSnapshot.next_action_date ?? null,
+    cost,
+    repeat_count: attempt,
+    seq: maxActionSeq(caseId) + 1,
+  });
 }
 
 function findDueCases() {
@@ -337,13 +358,21 @@ function advanceAfterAutomatedOutcome(caseRow, action, kind, ctx) {
     action_status: calcActionStatus(nextActionDate),
     case_cost: newCost,
   });
-  insertCaseHistory(
-    caseRow.id,
-    caseRow.debtor_id,
-    okHistoryOp,
-    { case_status: resultStatus, next_action: nextLabel, next_action_date: nextActionDate },
-    { action_type: action.action_type, result: outcome, cost, attempt: attemptsMade }
-  );
+  const caseSnapshot = {
+    case_status: resultStatus,
+    next_action: nextLabel,
+    next_action_date: nextActionDate,
+  };
+  logAutomatedStrategyAction(caseRow.id, {
+    operation: okHistoryOp,
+    action,
+    caseSnapshot,
+    bodyText,
+    result: outcome,
+    cost,
+    attempt: attemptsMade,
+    maxRepeat: Number(action.max_repeat) || 3,
+  });
   return { ok: true };
 }
 
@@ -366,60 +395,59 @@ function executeAutomatedAction(caseRow, action, kind, picked) {
   const retryStatus = kind === 'sms' ? 'pending_sms_retry' : 'pending_autocall_retry';
   const failHistoryOp = automatedHistoryOperation(action.action_type, true);
 
-  const repeatOn = parseRepeatOnResults(action);
+  const repeatOn = effectiveRepeatOnResults(action);
   const inRepeatList = repeatOn.includes(outcome);
   const shouldRetry = inRepeatList && attemptsMade < maxRepeat;
-
-  recordCaseAction(caseRow.id, action, bodyText, outcome, cost, attemptsMade);
+  const okHistoryOp = automatedHistoryOperation(action.action_type, false);
 
   if (shouldRetry) {
     const nextActionDate = computeNextActionDate(waitRepeat, action);
+    const caseSnapshot = {
+      case_status: retryStatus,
+      next_action: actionLabel,
+      next_action_date: nextActionDate,
+    };
     updateCaseFields(caseRow.id, {
       case_status: retryStatus,
       current_action_seq: action.seq,
       current_action_repeat: attemptsMade,
-      last_action: actionLabel,
-      last_action_date: todayJalali(),
+      last_action: failHistoryOp,
+      last_action_date: nowDatetime(),
       next_action: actionLabel,
       next_action_date: nextActionDate,
       action_status: calcActionStatus(nextActionDate),
       case_cost: newCost,
     });
-    insertCaseHistory(
-      caseRow.id,
-      caseRow.debtor_id,
-      failHistoryOp,
-      { case_status: retryStatus, next_action: actionLabel, next_action_date: nextActionDate },
-      {
-        action_type: action.action_type,
-        result: outcome,
-        attempt: attemptsMade,
-        max_repeat: maxRepeat,
-        repeat_on_results: repeatOn,
-      }
-    );
+    logAutomatedStrategyAction(caseRow.id, {
+      operation: failHistoryOp,
+      action,
+      caseSnapshot,
+      bodyText,
+      result: outcome,
+      cost,
+      attempt: attemptsMade,
+      maxRepeat,
+      extra: { repeat_on_results: repeatOn },
+    });
     return { ok: true };
   }
 
   if (inRepeatList && attemptsMade >= maxRepeat) {
-    insertCaseHistory(
-      caseRow.id,
-      caseRow.debtor_id,
-      failHistoryOp,
-      {
+    logAutomatedStrategyAction(caseRow.id, {
+      operation: failHistoryOp,
+      action,
+      caseSnapshot: {
         case_status: caseRow.case_status,
         next_action: actionLabel,
         next_action_date: caseRow.next_action_date ?? null,
       },
-      {
-        action_type: action.action_type,
-        result: outcome,
-        attempt: attemptsMade,
-        max_repeat: maxRepeat,
-        exhausted: true,
-        repeat_on_results: repeatOn,
-      }
-    );
+      bodyText,
+      result: outcome,
+      cost,
+      attempt: attemptsMade,
+      maxRepeat,
+      extra: { exhausted: true, repeat_on_results: repeatOn },
+    });
     return advanceAfterExhaustion(caseRow, action, newCost, `${outcome} — سقف تکرار (${maxRepeat}) پر شد`);
   }
 
@@ -641,21 +669,18 @@ function computeInitialNextActionDate(strategyId) {
   return computeNextActionDateFromWindow(first.allowed_from, first.allowed_to);
 }
 
-function recordStrategyFailureMarker(caseId, failedStrategyTitle) {
-  const maxSeq = query(
-    'SELECT COALESCE(MAX(seq), 0) AS m FROM case_actions WHERE case_id = $id',
-    { $id: caseId }
-  )[0].m;
-  dbRun(
-    `INSERT INTO case_actions (case_id, seq, action_type, body_text, result, action_date, cost)
-     VALUES ($cid, $seq, 'strategy_failure', NULL, $res, $date, 0)`,
-    {
-      $cid: caseId,
-      $seq: maxSeq + 1,
-      $res: failedStrategyTitle || 'شکست استراتژی',
-      $date: nowJalaliDateTime(),
-    }
-  );
+function recordStrategyFailureEvent(caseId, failedStrategyTitle, snapshot, details) {
+  insertActionEvent({
+    case_id: caseId,
+    action_type: 'strategy_failure',
+    result: failedStrategyTitle || 'شکست استراتژی',
+    seq: maxActionSeq(caseId) + 1,
+    cost: 0,
+    case_status: snapshot.case_status ?? null,
+    next_action: snapshot.next_action ?? null,
+    next_action_date: snapshot.next_action_date ?? null,
+    details: typeof details === 'string' ? details : JSON.stringify(details),
+  });
 }
 
 // CEI را طوری اصلاح می‌کند که دقیقاً داخل بازه سگمنت قرار گیرد (با احتساب شمول مرزها).
@@ -730,11 +755,10 @@ function handleStrategyFailure(caseRow) {
       next_action: 'تخصیص به حقوقی',
       next_action_date: null,
     };
-    insertCaseHistory(caseRow.id, caseRow.debtor_id, 'شکست استراتژی', snapshot, {
+    recordStrategyFailureEvent(caseRow.id, failedStrategyTitle, snapshot, {
       failed_strategy: failedStrategyTitle,
       reason: 'آخرین استراتژی این اعتبار بود',
     });
-    recordStrategyFailureMarker(caseRow.id, failedStrategyTitle);
     return { ok: true, lastSegment: true };
   }
 
@@ -783,14 +807,12 @@ function handleStrategyFailure(caseRow) {
     current_action_repeat: 0,
   });
 
-  recordStrategyFailureMarker(caseRow.id, failedStrategyTitle);
-
   const snapshot = {
     case_status: 'pending_strategy_start',
     next_action: nextAction,
     next_action_date: nextActionDate,
   };
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, 'شکست استراتژی', snapshot, {
+  recordStrategyFailureEvent(caseRow.id, failedStrategyTitle, snapshot, {
     failed_strategy: failedStrategyTitle,
     computed_cei: computedCei,
     boost_added: boostNew,
@@ -820,11 +842,10 @@ function completeStrategyLegalOnly(caseRow, failedStrategyTitle) {
     next_action: 'تخصیص به حقوقی',
     next_action_date: null,
   };
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, 'شکست استراتژی', snapshot, {
+  recordStrategyFailureEvent(caseRow.id, failedStrategyTitle, snapshot, {
     failed_strategy: failedStrategyTitle,
     reason: 'آخرین استراتژی این اعتبار بود',
   });
-  recordStrategyFailureMarker(caseRow.id, failedStrategyTitle);
   return { ok: true, lastSegment: true };
 }
 
@@ -869,6 +890,11 @@ async function run() {
 
   running = true;
   try {
+    const deferredShifts = processDeferredCeiStrategyShifts();
+    if (deferredShifts > 0) {
+      console.log(`[strategy-engine] ${deferredShifts} تغییر استراتژی معوق (Respite) اعمال شد`);
+    }
+
     const partialResumes = processDuePartialPaymentResumes();
     const negotiatorCases = findDueNegotiatorResultCases();
     const cases = findDueCases();

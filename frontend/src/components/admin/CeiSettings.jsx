@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, FlaskConical, History as HistoryIcon, CircleHelp } from 'lucide-react'
 import { fetchCeiFormulas, updateCeiFormula, testCeiFormula } from '../../api/cei'
-import { toFaDigits, formatRial } from '../../utils/format'
+import { toFaDigits, formatRial, formatSqliteDateTime, jalaliDateTimeStyle } from '../../utils/format'
 import Modal from '../modal/Modal'
 
 // تعریف فیلدهای پارامتر هر نوع اعتبار (Story 11.2)
@@ -36,11 +36,8 @@ const inputClass =
 const numInputClass = `${inputClass} text-left`
 
 function formatWhen(value) {
-  try {
-    return new Date(value.replace(' ', 'T') + 'Z').toLocaleString('fa-IR')
-  } catch {
-    return value
-  }
+  if (!value) return '—'
+  return <span style={jalaliDateTimeStyle}>{formatSqliteDateTime(value)}</span>
 }
 
 // نمایش بصری فرمول

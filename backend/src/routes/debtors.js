@@ -38,7 +38,7 @@ const AGGREGATE_SELECT = `
 /**
  * GET /api/debtors
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const {
       mobile,
@@ -125,8 +125,7 @@ router.get('/', (req, res) => {
       data,
     });
   } catch (err) {
-    console.error('[GET /api/debtors]', err);
-    res.status(500).json({ error: 'خطا در دریافت لیست بدهکاران' });
+    next(err);
   }
 });
 
@@ -153,7 +152,7 @@ function formatDebtorListRow(row) {
 /**
  * GET /api/debtors/:id
  */
-router.get('/:id', (req, res) => {
+router.get('/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const rows = query('SELECT * FROM debtors WHERE id = $id', { $id: id });
@@ -207,8 +206,7 @@ router.get('/:id', (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[GET /api/debtors/:id]', err);
-    res.status(500).json({ error: 'خطا در دریافت جزئیات بدهکار' });
+    next(err);
   }
 });
 
@@ -216,7 +214,7 @@ router.get('/:id', (req, res) => {
  * POST /api/debtors/:id/phone-numbers
  * body: { phone }
  */
-router.post('/:id/phone-numbers', (req, res) => {
+router.post('/:id/phone-numbers', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const { phone } = req.body || {};
@@ -282,8 +280,7 @@ router.post('/:id/phone-numbers', (req, res) => {
 
     res.status(201).json({ data: inserted });
   } catch (err) {
-    console.error('[POST /api/debtors/:id/phone-numbers]', err);
-    res.status(500).json({ error: 'خطا در افزودن شماره تماس' });
+    next(err);
   }
 });
 

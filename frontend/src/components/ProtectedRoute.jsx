@@ -1,10 +1,10 @@
 import { Navigate, Outlet } from 'react-router-dom'
-import { getToken, hasAnyRole, isAdmin } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 
 export default function ProtectedRoute({ adminOnly = false }) {
-  const token = getToken()
+  const { user, hasAnyRole, isAdmin } = useAuth()
 
-  if (!token) {
+  if (!user) {
     return <Navigate to="/login" replace />
   }
 

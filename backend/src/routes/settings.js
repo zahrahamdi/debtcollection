@@ -24,15 +24,14 @@ function isPositiveInt(value) {
  * GET /api/settings
  * همه تنظیمات را به صورت آبجکت key→value برمی‌گرداند.
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const rows = query('SELECT key, value FROM settings');
     const data = {};
     for (const r of rows) data[r.key] = r.value;
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/settings]', err);
-    res.status(500).json({ error: 'خطا در دریافت تنظیمات' });
+    next(err);
   }
 });
 
@@ -40,7 +39,7 @@ router.get('/', (req, res) => {
  * GET /api/settings/history?key=...
  * تاریخچه تغییرات یک کلید (یا همه، اگر key داده نشود).
  */
-router.get('/history', (req, res) => {
+router.get('/history', (req, res, next) => {
   try {
     const { key } = req.query;
     const rows = key
@@ -48,8 +47,7 @@ router.get('/history', (req, res) => {
       : query('SELECT * FROM settings_history ORDER BY id DESC');
     res.json({ data: rows });
   } catch (err) {
-    console.error('[GET /api/settings/history]', err);
-    res.status(500).json({ error: 'خطا در دریافت تاریخچه تنظیمات' });
+    next(err);
   }
 });
 
@@ -58,7 +56,7 @@ router.get('/history', (req, res) => {
  * به‌روزرسانی یک یا چند تنظیم به همراه ثبت تاریخچه.
  * body: { changes: [{ key, value }], user_name }
  */
-router.put('/', authorize('admin_panel', 'edit'), (req, res) => {
+router.put('/', authorize('admin_panel', 'edit'), (req, res, next) => {
   try {
     const { changes } = req.body || {};
     const userName = getActorName(req);
@@ -110,8 +108,7 @@ router.put('/', authorize('admin_panel', 'edit'), (req, res) => {
     for (const r of rows) data[r.key] = r.value;
     res.json({ data });
   } catch (err) {
-    console.error('[PUT /api/settings]', err);
-    res.status(500).json({ error: 'خطا در ذخیره تنظیمات' });
+    next(err);
   }
 });
 

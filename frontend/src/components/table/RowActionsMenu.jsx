@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { MoreVertical, History, UserPlus, Repeat, Scale } from 'lucide-react'
-import { hasPermission } from '../../utils/auth'
+import { useAuth } from '../../context/AuthContext'
 
 // منوی عملیات هر ردیف (بخش ۳.۱ PRD)
 export default function RowActionsMenu({ row, onViewHistory, onAssign, onReassign }) {
+  const { hasPermission } = useAuth()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 

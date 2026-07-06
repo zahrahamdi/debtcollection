@@ -3,7 +3,9 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { nowDatetime } = require('../db/dateUtil');
 const { authorize } = require('../middleware/auth.middleware');
+const { userDisplayName } = require('../services/auth.service');
 const { getActions, validateActions, replaceActions } = require('../db/strategyActions');
 
 const CREDIT_TYPES = ['loan', 'bnpl'];
@@ -65,7 +67,7 @@ function serialize(s) {
  * لیست استراتژی‌ها با عنوان سگمنت، تعداد پرونده فعال و ایجادکننده (Story 12.1).
  * ستون‌های A/B Test در برش بعدی پر می‌شوند.
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const rows = query(`
       SELECT
@@ -83,8 +85,7 @@ router.get('/', (req, res) => {
     `);
     res.json({ data: rows.map(serialize) });
   } catch (err) {
-    console.error('[GET /api/strategies]', err);
-    res.status(500).json({ error: 'خطا در دریافت استراتژی‌ها' });
+    next(err);
   }
 });
 
@@ -92,7 +93,7 @@ router.get('/', (req, res) => {
  * GET /api/strategies/:id
  * جزئیات یک استراتژی به همراه اکشن‌های آن (برای ویرایش).
  */
-router.get('/:id', (req, res) => {
+router.get('/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const rows = query(
@@ -103,17 +104,17 @@ router.get('/:id', (req, res) => {
     if (rows.length === 0) return res.status(404).json({ error: 'استراتژی یافت نشد' });
     res.json({ data: { ...serialize(rows[0]), actions: getActions(id) } });
   } catch (err) {
-    console.error('[GET /api/strategies/:id]', err);
-    res.status(500).json({ error: 'خطا در دریافت استراتژی' });
+    next(err);
   }
 });
 
 /**
  * POST /api/strategies
  */
-router.post('/', authorize('strategies', 'create'), (req, res) => {
+router.post('/', authorize('strategies', 'create'), (req, res, next) => {
   try {
-    const { title, credit_type, segment_id, created_by, actions } = req.body || {};
+    const { title, credit_type, segment_id, actions } = req.body || {};
+    const createdBy = userDisplayName(req.user);
     const cleanTitle = (title || '').trim();
     if (!cleanTitle) return res.status(400).json({ error: 'عنوان استراتژی اجباری است' });
     if (!CREDIT_TYPES.includes(credit_type)) {
@@ -129,10 +130,11 @@ router.post('/', authorize('strategies', 'create'), (req, res) => {
     const actErr = validateActions(actions);
     if (actErr) return res.status(400).json({ error: actErr });
 
+    const now = nowDatetime();
     const { lastInsertRowid } = run(
-      `INSERT INTO strategies (title, credit_type, segment_id, created_by)
-       VALUES ($title, $t, $sid, $by)`,
-      { $title: cleanTitle, $t: credit_type, $sid: segment_id, $by: created_by || 'ادمین' }
+      `INSERT INTO strategies (title, credit_type, segment_id, created_by, created_at, updated_at)
+       VALUES ($title, $t, $sid, $by, $now, $now)`,
+      { $title: cleanTitle, $t: credit_type, $sid: segment_id, $by: createdBy, $now: now }
     );
     replaceActions(lastInsertRowid, actions);
 
@@ -143,15 +145,14 @@ router.post('/', authorize('strategies', 'create'), (req, res) => {
     );
     res.status(201).json({ data: { ...serialize(rows[0]), actions: getActions(lastInsertRowid) } });
   } catch (err) {
-    console.error('[POST /api/strategies]', err);
-    res.status(500).json({ error: 'خطا در ایجاد استراتژی' });
+    next(err);
   }
 });
 
 /**
  * PUT /api/strategies/:id
  */
-router.put('/:id', authorize('strategies', 'edit'), (req, res) => {
+router.put('/:id', authorize('strategies', 'edit'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM strategies WHERE id = $id', { $id: id });
@@ -173,8 +174,8 @@ router.put('/:id', authorize('strategies', 'edit'), (req, res) => {
 
     run(
       `UPDATE strategies SET title = $title, credit_type = $t, segment_id = $sid,
-       updated_at = datetime('now') WHERE id = $id`,
-      { $title: cleanTitle, $t: credit_type, $sid: segment_id, $id: id }
+       updated_at = $now WHERE id = $id`,
+      { $title: cleanTitle, $t: credit_type, $sid: segment_id, $id: id, $now: nowDatetime() }
     );
     if (req.body.actions !== undefined) replaceActions(id, req.body.actions);
 
@@ -185,8 +186,7 @@ router.put('/:id', authorize('strategies', 'edit'), (req, res) => {
     );
     res.json({ data: { ...serialize(rows[0]), actions: getActions(id) } });
   } catch (err) {
-    console.error('[PUT /api/strategies/:id]', err);
-    res.status(500).json({ error: 'خطا در ویرایش استراتژی' });
+    next(err);
   }
 });
 
@@ -194,7 +194,7 @@ router.put('/:id', authorize('strategies', 'edit'), (req, res) => {
  * DELETE /api/strategies/:id
  * حذف فقط اگر هیچ پرونده بازی وجود نداشته باشد (AC5).
  */
-router.delete('/:id', authorize('strategies', 'delete'), (req, res) => {
+router.delete('/:id', authorize('strategies', 'delete'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM strategies WHERE id = $id', { $id: id });
@@ -204,11 +204,11 @@ router.delete('/:id', authorize('strategies', 'delete'), (req, res) => {
       return res.status(400).json({ error: 'این استراتژی پرونده باز دارد و قابل حذف نیست' });
     }
 
+    run('DELETE FROM ab_tests WHERE strategy_a_id = $id OR strategy_b_id = $id', { $id: id });
     run('DELETE FROM strategies WHERE id = $id', { $id: id });
     res.json({ data: { id } });
   } catch (err) {
-    console.error('[DELETE /api/strategies/:id]', err);
-    res.status(500).json({ error: 'خطا در حذف استراتژی' });
+    next(err);
   }
 });
 

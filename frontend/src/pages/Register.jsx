@@ -3,13 +3,15 @@ import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Check, X } from 'lucide-react'
 import { register } from '../api/auth'
-import { setToken, PASSWORD_RULES } from '../utils/auth'
+import { PASSWORD_RULES } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 export default function Register() {
   const navigate = useNavigate()
+  const { refreshUser } = useAuth()
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -38,10 +40,8 @@ export default function Register() {
         email: form.email.trim(),
         password: form.password,
       })
-      if (result?.data?.token) {
-        setToken(result.data.token)
-      }
       if (result?.data?.has_role === false) {
+        await refreshUser()
         navigate('/waiting', { replace: true })
         return
       }

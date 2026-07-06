@@ -1,8 +1,9 @@
 import { NavLink } from 'react-router-dom'
 import { navItems } from '../../routes/navItems'
-import { isAdmin } from '../../utils/auth'
+import { useAuth } from '../../context/AuthContext'
 
 export default function Sidebar() {
+  const { isAdmin } = useAuth()
   const items = navItems.filter((item) => !item.adminOnly || isAdmin())
 
   return (

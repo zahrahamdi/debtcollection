@@ -1,12 +1,8 @@
 import client from './client'
-import { setToken, setCurrentUser, removeToken } from '../utils/auth'
 
 export async function login(username, password) {
   const { data } = await client.post('/auth/login', { username, password })
-  const { token, user } = data.data
-  setToken(token)
-  setCurrentUser(user)
-  return user
+  return data.data?.user ?? data.data
 }
 
 export async function register(formData) {
@@ -25,10 +21,9 @@ export async function forgotPassword(email, newPassword, confirmPassword) {
 
 export async function getMe() {
   const { data } = await client.get('/auth/me')
-  setCurrentUser(data.data)
   return data.data
 }
 
-export function logout() {
-  removeToken()
+export async function logout() {
+  await client.post('/auth/logout')
 }

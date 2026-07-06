@@ -197,13 +197,13 @@ async function main() {
   persist();
 
   // ---------- ساخت فایل Excel بارگذاری پرداخت‌ها ----------
-  const payDate = todayJalali();
+  const payDateTime = nowJalaliDateTime();
   const sheetRows = [
     {
       'شناسه اعتبار': 'CR-7001',
       'کد ملی': DEBTORS['CR-7001'].national_code,
       'مبلغ پرداختی به ریال': 60000000, // < مطالبات (۲۰۰٬۰۰۰٬۰۰۰) → پرداخت جزئی
-      'تاریخ پرداخت': payDate,
+      'تاریخ و ساعت پرداخت': payDateTime,
       'شماره تراکنش': 'TXN-7001',
       'توضیحات': 'پرداخت جزئی آزمایشی',
     },
@@ -211,13 +211,13 @@ async function main() {
       'شناسه اعتبار': 'CR-7002',
       'کد ملی': DEBTORS['CR-7002'].national_code,
       'مبلغ پرداختی به ریال': 120000000, // = مطالبات (۱۲۰٬۰۰۰٬۰۰۰) → پرداخت کامل
-      'تاریخ پرداخت': payDate,
+      'تاریخ و ساعت پرداخت': payDateTime,
       'شماره تراکنش': 'TXN-7002',
       'توضیحات': 'پرداخت کامل آزمایشی',
     },
   ];
   const ws = XLSX.utils.json_to_sheet(sheetRows, {
-    header: ['شناسه اعتبار', 'کد ملی', 'مبلغ پرداختی به ریال', 'تاریخ پرداخت', 'شماره تراکنش', 'توضیحات'],
+    header: ['شناسه اعتبار', 'کد ملی', 'مبلغ پرداختی به ریال', 'تاریخ و ساعت پرداخت', 'شماره تراکنش', 'توضیحات'],
   });
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'payments');

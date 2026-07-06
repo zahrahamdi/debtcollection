@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
 const { authenticate } = require('../middleware/auth.middleware');
+const { setAuthCookie, clearAuthCookie } = require('../utils/cookies');
 const {
   USERNAME_RE,
   EMAIL_RE,
@@ -17,7 +18,7 @@ const {
 /**
  * POST /api/auth/register
  */
-router.post('/register', (req, res) => {
+router.post('/register', (req, res, next) => {
   try {
     const { first_name, last_name, username, email, password } = req.body || {};
     const fn = (first_name || '').trim();
@@ -55,21 +56,21 @@ router.post('/register', (req, res) => {
     );
 
     const token = signToken(lastInsertRowid, { has_role: false });
+    setAuthCookie(res, token);
 
     res.status(201).json({
       message: 'ثبت‌نام موفق. منتظر تخصیص نقش از سمت ادمین باشید.',
-      data: { id: lastInsertRowid, token, has_role: false },
+      data: { id: lastInsertRowid, has_role: false },
     });
   } catch (err) {
-    console.error('[POST /api/auth/register]', err);
-    res.status(500).json({ error: 'خطا در ثبت‌نام' });
+    next(err);
   }
 });
 
 /**
  * POST /api/auth/login
  */
-router.post('/login', (req, res) => {
+router.post('/login', (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     const un = (username || '').trim().toLowerCase();
@@ -87,10 +88,10 @@ router.post('/login', (req, res) => {
 
     const user = loadUserAuthPayload(rows[0].id);
     const token = signToken(rows[0].id);
+    setAuthCookie(res, token);
 
     res.json({
       data: {
-        token,
         has_role: user.roles.length > 0,
         user: {
           id: user.id,
@@ -106,15 +107,14 @@ router.post('/login', (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[POST /api/auth/login]', err);
-    res.status(500).json({ error: 'خطا در ورود' });
+    next(err);
   }
 });
 
 /**
  * POST /api/auth/forgot-password
  */
-router.post('/forgot-password', (req, res) => {
+router.post('/forgot-password', (req, res, next) => {
   try {
     const { email, new_password, confirm_password } = req.body || {};
     const em = (email || '').trim().toLowerCase();
@@ -141,8 +141,7 @@ router.post('/forgot-password', (req, res) => {
 
     res.json({ message: 'رمز عبور با موفقیت تغییر کرد' });
   } catch (err) {
-    console.error('[POST /api/auth/forgot-password]', err);
-    res.status(500).json({ error: 'خطا در تغییر رمز عبور' });
+    next(err);
   }
 });
 
@@ -157,6 +156,7 @@ router.get('/me', authenticate, (req, res) => {
  * POST /api/auth/logout
  */
 router.post('/logout', (_req, res) => {
+  clearAuthCookie(res);
   res.json({ message: 'خروج موفق' });
 });
 

@@ -4,9 +4,9 @@ const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { query, run } = require('../db/database');
+const { nowDatetime } = require('../db/dateUtil');
 const { importCasesFromRows, MAX_ROWS } = require('../services/case-import.service');
 const { importPaymentsFromRows } = require('../services/payment-import.service');
-const { deleteDebtorByMobile, deleteAllExceptMobile } = require('../services/debtor-cleanup.service');
 const {
   bulkAssignFromRows,
   bulkReassignFromRows,
@@ -47,16 +47,54 @@ function buildErrorWorkbook(errorRows) {
 }
 
 function operationStatus(total, success, fail) {
-  if (fail === 0) return 'success';
+  if (success === 0 && fail === 0) return total > 0 ? 'failed' : 'failed';
+  if (fail === 0 && success > 0) return 'success';
   if (success === 0) return 'failed';
   return 'partial';
+}
+
+function insertBulkOperation(userName, operationType, totalCount) {
+  const createdAt = nowDatetime();
+  const { lastInsertRowid } = run(
+    `INSERT INTO bulk_operations (user_name, operation_type, total_count, status, created_at)
+     VALUES ($user, $type, $total, 'processing', $ca)`,
+    { $user: userName, $type: operationType, $total: totalCount, $ca: createdAt }
+  );
+  return lastInsertRowid;
+}
+
+function completeBulkOperation(bulkId, { successCount, failCount, status, errorReport }) {
+  run(
+    `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
+     error_report = $er, completed_at = $ca WHERE id = $id`,
+    {
+      $s: successCount,
+      $f: failCount,
+      $st: status,
+      $er: JSON.stringify(errorReport),
+      $ca: nowDatetime(),
+      $id: bulkId,
+    }
+  );
+}
+
+function failBulkOperation(bulkId, reason) {
+  run(
+    `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
+     error_report = $er, completed_at = $ca WHERE id = $id`,
+    {
+      $er: JSON.stringify({ errors: [{ reason }] }),
+      $ca: nowDatetime(),
+      $id: bulkId,
+    }
+  );
 }
 
 /**
  * POST /api/bulk/upload-cases
  * body (multipart): file, user_name (optional)
  */
-router.post('/upload-cases', upload.single('file'), (req, res) => {
+router.post('/upload-cases', upload.single('file'), (req, res, next) => {
   let bulkId = null;
   try {
     if (!req.file) {
@@ -73,12 +111,7 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: `حداکثر ${MAX_ROWS} ردیف در هر فایل قابل پردازش است` });
     }
 
-    const { lastInsertRowid } = run(
-      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
-       VALUES ($user, 'upload_cases', $total, 'processing')`,
-      { $user: userName, $total: rows.length }
-    );
-    bulkId = lastInsertRowid;
+    bulkId = insertBulkOperation(userName, 'upload_cases', rows.length);
 
     const result = importCasesFromRows(rows, userName);
     const successCount = result.created + result.updated;
@@ -90,17 +123,12 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
       error_rows: result.error_rows,
     };
 
-    run(
-      `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
-       error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-      {
-        $s: successCount,
-        $f: failCount,
-        $st: status,
-        $er: JSON.stringify(errorReport),
-        $id: bulkId,
-      }
-    );
+    completeBulkOperation(bulkId, {
+      successCount,
+      failCount,
+      status,
+      errorReport,
+    });
 
     res.json({
       bulk_id: bulkId,
@@ -115,14 +143,8 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
     });
   } catch (err) {
     console.error('[POST /api/bulk/upload-cases]', err);
-    if (bulkId) {
-      run(
-        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
-         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
-      );
-    }
-    res.status(400).json({ error: err.message || 'خطا در پردازش فایل Excel' });
+    if (bulkId) failBulkOperation(bulkId, err.message);
+    next(err.status ? err : Object.assign(err, { status: 400 }));
   }
 });
 
@@ -130,7 +152,7 @@ router.post('/upload-cases', upload.single('file'), (req, res) => {
  * POST /api/bulk/upload-payments
  * body (multipart): file, user_name (optional)
  */
-router.post('/upload-payments', upload.single('file'), (req, res) => {
+router.post('/upload-payments', upload.single('file'), (req, res, next) => {
   let bulkId = null;
   try {
     if (!req.file) {
@@ -147,14 +169,22 @@ router.post('/upload-payments', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: `حداکثر ${MAX_ROWS} ردیف در هر فایل قابل پردازش است` });
     }
 
-    const { lastInsertRowid } = run(
-      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
-       VALUES ($user, 'upload_payments', $total, 'processing')`,
-      { $user: userName, $total: rows.length }
-    );
-    bulkId = lastInsertRowid;
+    bulkId = insertBulkOperation(userName, 'upload_payments', rows.length);
 
     const result = importPaymentsFromRows(rows, userName);
+
+    if (result.total === 0) {
+      failBulkOperation(bulkId, 'فایل Excel فاقد ردیف داده معتبر است');
+      return res.status(400).json({ error: 'فایل Excel فاقد ردیف داده معتبر است' });
+    }
+
+    if (result.total !== rows.length) {
+      run('UPDATE bulk_operations SET total_count = $t WHERE id = $id', {
+        $t: result.total,
+        $id: bulkId,
+      });
+    }
+
     const status = operationStatus(result.total, result.success_count, result.fail_count);
 
     const errorReport = {
@@ -162,17 +192,12 @@ router.post('/upload-payments', upload.single('file'), (req, res) => {
       error_rows: result.error_rows,
     };
 
-    run(
-      `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
-       error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-      {
-        $s: result.success_count,
-        $f: result.fail_count,
-        $st: status,
-        $er: JSON.stringify(errorReport),
-        $id: bulkId,
-      }
-    );
+    completeBulkOperation(bulkId, {
+      successCount: result.success_count,
+      failCount: result.fail_count,
+      status,
+      errorReport,
+    });
 
     res.json({
       bulk_id: bulkId,
@@ -187,35 +212,24 @@ router.post('/upload-payments', upload.single('file'), (req, res) => {
     });
   } catch (err) {
     console.error('[POST /api/bulk/upload-payments]', err);
-    if (bulkId) {
-      run(
-        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
-         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
-      );
-    }
-    res.status(400).json({ error: err.message || 'خطا در پردازش فایل Excel پرداخت‌ها' });
+    if (bulkId) failBulkOperation(bulkId, err.message);
+    next(err.status ? err : Object.assign(err, { status: 400 }));
   }
 });
 
-function finishBulkOperation(bulkId, result, operationType) {
+function finishBulkOperation(bulkId, result) {
   const status = operationStatus(result.total, result.success_count, result.fail_count);
   const errorReport = {
     errors: result.errors,
     error_rows: result.error_rows,
   };
 
-  run(
-    `UPDATE bulk_operations SET success_count = $s, fail_count = $f, status = $st,
-     error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-    {
-      $s: result.success_count,
-      $f: result.fail_count,
-      $st: status,
-      $er: JSON.stringify(errorReport),
-      $id: bulkId,
-    }
-  );
+  completeBulkOperation(bulkId, {
+    successCount: result.success_count,
+    failCount: result.fail_count,
+    status,
+    errorReport,
+  });
 
   return {
     bulk_id: bulkId,
@@ -232,7 +246,7 @@ function finishBulkOperation(bulkId, result, operationType) {
  * POST /api/bulk/assign-cases
  * body (multipart): file, user_name (optional)
  */
-router.post('/assign-cases', upload.single('file'), (req, res) => {
+router.post('/assign-cases', upload.single('file'), (req, res, next) => {
   let bulkId = null;
   try {
     if (!req.file) {
@@ -251,25 +265,14 @@ router.post('/assign-cases', upload.single('file'), (req, res) => {
       });
     }
 
-    const { lastInsertRowid } = run(
-      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
-       VALUES ($user, 'bulk_assign', $total, 'processing')`,
-      { $user: userName, $total: rows.length }
-    );
-    bulkId = lastInsertRowid;
+    bulkId = insertBulkOperation(userName, 'bulk_assign', rows.length);
 
     const result = bulkAssignFromRows(rows, userName);
     res.json(finishBulkOperation(bulkId, result));
   } catch (err) {
     console.error('[POST /api/bulk/assign-cases]', err);
-    if (bulkId) {
-      run(
-        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
-         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
-      );
-    }
-    res.status(400).json({ error: err.message || 'خطا در پردازش فایل تخصیص گروهی' });
+    if (bulkId) failBulkOperation(bulkId, err.message);
+    next(err.status ? err : Object.assign(err, { status: 400 }));
   }
 });
 
@@ -277,7 +280,7 @@ router.post('/assign-cases', upload.single('file'), (req, res) => {
  * POST /api/bulk/reassign-cases
  * body (multipart): file, user_name (optional)
  */
-router.post('/reassign-cases', upload.single('file'), (req, res) => {
+router.post('/reassign-cases', upload.single('file'), (req, res, next) => {
   let bulkId = null;
   try {
     if (!req.file) {
@@ -296,77 +299,14 @@ router.post('/reassign-cases', upload.single('file'), (req, res) => {
       });
     }
 
-    const { lastInsertRowid } = run(
-      `INSERT INTO bulk_operations (user_name, operation_type, total_count, status)
-       VALUES ($user, 'bulk_reassign', $total, 'processing')`,
-      { $user: userName, $total: rows.length }
-    );
-    bulkId = lastInsertRowid;
+    bulkId = insertBulkOperation(userName, 'bulk_reassign', rows.length);
 
     const result = bulkReassignFromRows(rows, userName);
     res.json(finishBulkOperation(bulkId, result));
   } catch (err) {
     console.error('[POST /api/bulk/reassign-cases]', err);
-    if (bulkId) {
-      run(
-        `UPDATE bulk_operations SET status = 'failed', fail_count = total_count,
-         error_report = $er, completed_at = datetime('now') WHERE id = $id`,
-        { $er: JSON.stringify({ errors: [{ reason: err.message }] }), $id: bulkId }
-      );
-    }
-    res.status(400).json({ error: err.message || 'خطا در پردازش فایل تخصیص مجدد گروهی' });
-  }
-});
-
-/**
- * POST /api/bulk/delete-all-except-mobile
- * body: { mobile: "09128898006" } — حذف همه پرونده‌ها جز بدهکار با این موبایل
- */
-router.post('/delete-all-except-mobile', (req, res) => {
-  try {
-    const mobile = req.body?.mobile || req.query?.mobile;
-    if (!mobile) {
-      return res.status(400).json({ error: 'شماره موبایل الزامی است' });
-    }
-    const result = deleteAllExceptMobile(mobile);
-    if (!result.ok) {
-      return res.status(404).json({ error: result.error });
-    }
-    res.json({
-      message: 'همه پرونده‌ها حذف شدند؛ فقط بدهکار مشخص‌شده باقی ماند',
-      kept: result.kept,
-      kept_cases: result.kept_cases,
-      removed_debtors: result.removed_debtors,
-      deleted: result.deleted,
-    });
-  } catch (err) {
-    console.error('[POST /api/bulk/delete-all-except-mobile]', err);
-    res.status(500).json({ error: 'خطا در حذف پرونده‌ها' });
-  }
-});
-
-/**
- * POST /api/bulk/delete-debtor-by-mobile
- * body: { mobile: "09128898006" } — حذف بدهکار و پرونده‌های مرتبط (ادمین دمو)
- */
-router.post('/delete-debtor-by-mobile', (req, res) => {
-  try {
-    const mobile = req.body?.mobile || req.query?.mobile;
-    if (!mobile) {
-      return res.status(400).json({ error: 'شماره موبایل الزامی است' });
-    }
-    const result = deleteDebtorByMobile(mobile);
-    if (!result.found) {
-      return res.status(404).json({ error: 'بدهکاری با این شماره موبایل یافت نشد' });
-    }
-    res.json({
-      message: 'بدهکار و پرونده‌های مرتبط حذف شدند',
-      matched: result.matched,
-      deleted: result.deleted,
-    });
-  } catch (err) {
-    console.error('[POST /api/bulk/delete-debtor-by-mobile]', err);
-    res.status(500).json({ error: 'خطا در حذف بدهکار' });
+    if (bulkId) failBulkOperation(bulkId, err.message);
+    next(err.status ? err : Object.assign(err, { status: 400 }));
   }
 });
 
@@ -374,7 +314,7 @@ router.post('/delete-debtor-by-mobile', (req, res) => {
  * GET /api/bulk/history
  * query: user_name (optional — PRD: هر کاربر تاریخچه خود را می‌بیند)
  */
-router.get('/history', (req, res) => {
+router.get('/history', (req, res, next) => {
   try {
     const userName = req.query.user_name;
     let rows;
@@ -382,14 +322,14 @@ router.get('/history', (req, res) => {
       rows = query(
         `SELECT id, user_name, operation_type, total_count, success_count, fail_count,
                 status, created_at, completed_at
-         FROM bulk_operations WHERE user_name = $user ORDER BY created_at DESC`,
+         FROM bulk_operations WHERE user_name = $user ORDER BY completed_at DESC, created_at DESC`,
         { $user: userName }
       );
     } else {
       rows = query(
         `SELECT id, user_name, operation_type, total_count, success_count, fail_count,
                 status, created_at, completed_at
-         FROM bulk_operations ORDER BY created_at DESC`
+         FROM bulk_operations ORDER BY completed_at DESC, created_at DESC`
       );
     }
 
@@ -398,12 +338,12 @@ router.get('/history', (req, res) => {
       operation_label: operationTypeLabel(r.operation_type),
       status_label: statusLabel(r.status),
       has_error_report: r.fail_count > 0,
+      performed_at: r.completed_at || r.created_at,
     }));
 
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/bulk/history]', err);
-    res.status(500).json({ error: 'خطا در دریافت تاریخچه عملیات گروهی' });
+    next(err);
   }
 });
 
@@ -411,7 +351,7 @@ router.get('/history', (req, res) => {
  * GET /api/bulk/error-report/:id
  * دانلود فایل Excel خطاها
  */
-router.get('/error-report/:id', (req, res) => {
+router.get('/error-report/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const rows = query('SELECT error_report, operation_type FROM bulk_operations WHERE id = $id', {
@@ -436,8 +376,7 @@ router.get('/error-report/:id', (req, res) => {
     );
     res.send(buffer);
   } catch (err) {
-    console.error('[GET /api/bulk/error-report/:id]', err);
-    res.status(500).json({ error: 'خطا در تولید گزارش خطا' });
+    next(err);
   }
 });
 

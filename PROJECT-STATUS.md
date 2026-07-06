@@ -1,5 +1,7 @@
 # وضعیت پروژه — سیستم وصول مطالبات دیجی‌پی
 
+> مستندات مرتبط: [README](./README.md) · [TECHNICAL](./TECHNICAL.md) · [case-status-diagram.html](./case-status-diagram.html)
+
 ---
 
 ## ۱. ساختار فایل‌های Backend
@@ -52,16 +54,16 @@ frontend/
     │   └── navItems.js           آیتم‌های منوی کناری (icon, label, to, adminOnly)
     │
     ├── pages/
-    │   ├── Cases.jsx             ✅ صفحه پرونده‌ها — جدول + فیلتر + سایدبار + مدال‌ها
-    │   ├── Negotiators.jsx       ✅ صفحه مذاکره‌کنندگان — جدول + ایجاد + ویرایش
-    │   ├── Strategies.jsx        ✅ صفحه استراتژی‌ها — جدول + ایجاد + ویرایش + A/B Test
-    │   ├── AdminPanel.jsx        ✅ ادمین پنل — منوی بخش‌ها + محتوای هر بخش
-    │   ├── Debtors.jsx           ⏳ Placeholder — هنوز پیاده‌سازی نشده
-    │   ├── Installments.jsx      ⏳ Placeholder — هنوز پیاده‌سازی نشده
-    │   ├── History.jsx           ⏳ Placeholder — هنوز پیاده‌سازی نشده
-    │   ├── BulkOperations.jsx    ⏳ Placeholder — هنوز پیاده‌سازی نشده
-    │   ├── Reports.jsx           ⏳ Placeholder — هنوز پیاده‌سازی نشده
-    │   └── PlaceholderPage.jsx   کامپوننت عمومی «به‌زودی»
+    │   ├── Cases.jsx             ✅ پرونده‌ها — جدول paginated + فیلتر + سایدبار + مدال‌ها
+    │   ├── Negotiators.jsx       ✅ مذاکره‌کنندگان
+    │   ├── Strategies.jsx        ✅ استراتژی‌ها + A/B Test
+    │   ├── AdminPanel.jsx        ✅ ادمین پنل
+    │   ├── Debtors.jsx           ✅ بدهکاران
+    │   ├── Installments.jsx      ✅ اقساط
+    │   ├── History.jsx           ✅ تاریخچه Audit Trail + جزئیات فارسی
+    │   ├── BulkOperations.jsx    ✅ عملیات گروهی + دانلود نمونه TSV
+    │   ├── Reports.jsx           ✅ گزارشات (پرونده / استراتژی / مذاکره‌کننده)
+    │   └── PlaceholderPage.jsx   کامپوننت «به‌زودی» (صفحات آینده)
     │
     ├── components/
     │   ├── layout/
@@ -104,9 +106,10 @@ frontend/
     │   └── gsheet.js             testGsheetConnection
     │
     └── utils/
-        ├── auth.js               currentUser (mock) + isAdmin()
-        ├── constants.js          برچسب فارسی وضعیت‌ها، انواع اقدام، نوع اعتبار، ...
-        └── format.js             toFaDigits, formatRial, orDash, ...
+        ├── auth.js               JWT, hasPermission, isAdmin
+        ├── constants.js          برچسب وضعیت‌ها، HISTORY_OPERATIONS
+        ├── historyDetails.js     جزئیات فارسی تاریخچه
+        └── format.js             toFaDigits, formatRial, orDash, …
 ```
 
 ---
@@ -272,7 +275,19 @@ frontend/
 | payment_type | TEXT | `full` / `partial` |
 | created_at | TEXT | تاریخ ثبت |
 
-### case_history — تاریخچه تغییرات (Audit Trail)
+### case_events — رویدادهای یکپارچه پرونده ★
+| فیلد | نوع | توضیح |
+|---|---|---|
+| id | INTEGER PK | شناسه |
+| case_id | INTEGER FK | پرونده |
+| event_type | TEXT | `action` / `history` / `payment` |
+| action_type | TEXT | نوع اقدام (برای event_type=action) |
+| label | TEXT | برچسب عملیات (فارسی) |
+| details | TEXT | JSON جزئیات |
+| cost | INTEGER | هزینه |
+| created_at | TEXT | زمان |
+
+### case_history — تاریخچه (legacy)
 | فیلد | نوع | توضیح |
 |---|---|---|
 | id | INTEGER PK | شناسه |
@@ -425,65 +440,52 @@ frontend/
 
 ## ۵. وضعیت فعلی: چه چیزی پیاده شده و چه چیزی نیست
 
+> **به‌روز:** تیر ۱۴۰۵ — برای جزئیات فنی [TECHNICAL.md](./TECHNICAL.md) و دیاگرام وضعیت [case-status-diagram.html](./case-status-diagram.html)
+
 ### ✅ پیاده‌سازی شده
 
 **Backend:**
-- ساختار کامل دیتابیس (۱۴ جدول، ایندکس‌ها، Foreign Keyها)
-- موتور محاسبه CEI (فرمول وام + BNPL با پارامترهای قابل تنظیم)
-- نسخه‌بندی فرمول CEI (هر ذخیره = نسخه جدید، نسخه قبلی غیرفعال)
-- مدیریت مذاکره‌کنندگان (CRUD + فیلدهای محاسباتی: نرخ موفقیت، پرونده فعال، تماس امروز)
-- مدیریت سگمنت‌ها (CRUD + بررسی همپوشانی CEI + بررسی نام تکراری)
-- مدیریت استراتژی‌ها و اکشن‌ها (CRUD کامل)
-- سناریوهای A/B Test (ایجاد با دو استراتژی جدید، حذف)
-- تخصیص / تخصیص مجدد پرونده (بررسی ظرفیت، قانون یک بدهکار = یک مذاکره‌کننده)
-- ثبت خروجی تماس (وضعیت تماس، دلیل عدم پرداخت، Promise to Pay، ارجاع به حقوقی، محاسبه هزینه)
-- تنظیمات عمومی (key/value + تاریخچه)
-- Audit Trail در case_history برای تخصیص و ثبت تماس
-- تست آدرس Google Sheet (دمو — فقط validation فرمت)
-- Seed داده‌های اولیه
+- دیتابیس کامل + `case_events` (منبع اصلی رویدادها)
+- موتور CEI، سگمنت، استراتژی، A/B Test
+- موتور استراتژی (scheduler هر ۱ دقیقه) + `repeat_on_results`
+- import پرونده/پرداخت Excel، تخصیص گروهی
+- Respite Time و `processDeferredCeiStrategyShifts` (قبل از tick موتور)
+- پرداخت جزئی/کامل، پرداخت جزئی قبل از سررسید تعهد
+- گزارشات: KPI، funnel، **عملکرد استراتژی (tenure)**، هزینه/وصول، مذاکره‌کنندگان
+- `strategy-attribution.service.js` — نسبت‌دهی پرونده به بازه‌های اجرای استراتژی
+- JWT + RBAC + `cases.service` / `reports.service`
+- اسکریپت `clear-all-cases` و maintenance flag
 
 **Frontend:**
-- لایه API کامل برای همه endpointها
-- صفحه پرونده‌ها: جدول با فیلتر سمت کلاینت، سایدبار جزئیات، مدال تخصیص، مدال ثبت تماس
-- صفحه مذاکره‌کنندگان: جدول، مدال ایجاد/ویرایش، لینک به پرونده‌های فیلترشده
-- صفحه استراتژی‌ها: جدول، مدال ایجاد/ویرایش با بیلدر اکشن، مدال A/B Test
-- ادمین پنل: شرایط ایجاد پرونده، فرمول CEI، سگمنت‌ها، تنظیمات عمومی، Google Sheet
-- منوی کناری با کنترل دسترسی adminOnly
-- Badge رنگی، فرمت‌های عددی فارسی، سیستم toast
+- همه صفحات اصلی (Cases، Reports، History، Bulk، Debtors، …)
+- Recharts + React Flow (Funnel)
+- `historyDetails.js` — نمایش فارسی جزئیات تاریخچه
+- دانلود نمونه bulk-assign / bulk-reassign از UI
 
 ---
 
-### ⏳ هنوز پیاده‌سازی نشده
+### ⏳ باقی‌مانده / بدهی
 
-**صفحات Frontend:**
-- صفحه بدهکاران (Debtors) — لیست، سایدبار، افزودن شماره تماس
-- صفحه اقساط (Installments) — نمایش جزئیات اقساط
-- صفحه تاریخچه تغییرات (History / Audit Trail)
-- صفحه عملیات گروهی (BulkOperations) — آپلود Excel، تخصیص گروهی
-- صفحه گزارشات (Reports)
+- سینک واقعی Google Sheet (فقط validation URL)
+- forgot-password بدون OTP
+- تست خودکار (Vitest / Playwright)
+- Schema drift برخی فیلدهای installments در API
+- GSheet sync UI کامل
 
-**Backend — APIهای ناموجود:**
-- CRUD بدهکاران (debtors)
-- افزودن / مدیریت شماره تماس و آدرس
-- مشاهده تاریخچه پرونده (case_history)
-- مشاهده اقساط یک پرونده (installments)
-- ثبت پرداخت (payments)
-- عملیات گروهی: آپلود Excel، تخصیص گروهی
-- سینک واقعی با Google Sheet (الان فقط validation آدرس)
-- گزارشات
+---
 
-**منطق‌های پیاده‌نشده (backend):**
-- اجرای خودکار اکشن‌های استراتژی (scheduler / cron)
-- منطق تغییر استراتژی پس از تغییر CEI (بخش ۵.۴ PRD)
-- منطق پرداخت جزئی (recalculate CEI + next_action_date)
-- منطق پرداخت کامل (تغییر وضعیت به paid)
-- اعتبارسنجی قوانین ایجاد پرونده (DPD ≥ min_dpd، کلاس بدهی)
-- پردازش فایل Excel (آپلود، خواندن، اعتبارسنجی، ایجاد/به‌روزرسانی پرونده)
-- ارسال پیامک و تماس خودکار
+### ~~بخش قدیمی (منسوخ)~~
 
-**سیستم احراز هویت:**
-- فعلاً mock ثابت (کاربر: زهرا حمیدی، نقش: admin)
-- نقش مذاکره‌کننده پیاده‌سازی نشده
+<details>
+<summary>نسخه قدیمی این سند (قبل از به‌روزرسانی)</summary>
+
+**Backend — APIهای ناموجود (قدیمی):**
+- گزارشات، bulk، … — **اکنون پیاده شده**
+
+**منطق‌های پیاده‌نشده (قدیمی):**
+- scheduler، پرداخت جزئی، auth — **اکنون پیاده شده**
+
+</details>
 
 ---
 
@@ -521,6 +523,7 @@ frontend/
 
 ## اطلاعات اجرا
 
-- **Backend:** `cd backend && npm run dev` → پورت ۳۰۰۰
-- **Frontend:** `cd frontend && npm run dev` → پورت ۵۱۷۳ (پیش‌فرض Vite)
+- **Frontend:** `cd frontend && npm run dev` → پورت **۵۱۷۳** (`strictPort: true` در vite.config)
 - **Seed داده:** `cd backend && npm run seed`
+- **پاک کردن پرونده‌ها:** `cd backend && npm run clear-all-cases`
+- **دیاگرام وضعیت:** باز کردن `case-status-diagram.html` در مرورگر

@@ -1,6 +1,7 @@
 'use strict';
 
 const { query, run } = require('../db/database');
+const { insertHistoryEvent } = require('../db/caseEvents');
 const { nowDatetime, calcActionStatus, todayJalali } = require('../db/dateUtil');
 const { ASSIGN_OPERATION } = require('../db/lastAction');
 
@@ -257,39 +258,27 @@ function processRows(rows, mode, userName) {
 }
 
 function insertAssignHistory(caseId, debtorId, userName, negotiatorName, updated) {
-  run(
-    `INSERT INTO case_history
-      (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-     VALUES ($cid, $did, $user, $op, $status, $na, $nad, $details)`,
-    {
-      $cid: caseId,
-      $did: debtorId,
-      $user: userName || 'ادمین',
-      $op: 'تخصیص به مذاکره‌کننده',
-      $status: updated.case_status,
-      $na: updated.next_action,
-      $nad: updated.next_action_date,
-      $details: `مذاکره‌کننده: ${negotiatorName} — نوبت تماس از ${updated.next_action_date}`,
-    }
-  );
+  insertHistoryEvent({
+    case_id: caseId,
+    operation: 'تخصیص به مذاکره‌کننده',
+    user_name: userName || 'ادمین',
+    case_status: updated.case_status,
+    next_action: updated.next_action,
+    next_action_date: updated.next_action_date,
+    details: `مذاکره‌کننده: ${negotiatorName} — نوبت تماس از ${updated.next_action_date}`,
+  });
 }
 
 function insertReassignHistory(caseId, debtorId, userName, prevName, newName, updated) {
-  run(
-    `INSERT INTO case_history
-      (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-     VALUES ($cid, $did, $user, $op, $status, $na, $nad, $details)`,
-    {
-      $cid: caseId,
-      $did: debtorId,
-      $user: userName || 'ادمین',
-      $op: 'تخصیص مجدد',
-      $status: updated.case_status,
-      $na: updated.next_action,
-      $nad: updated.next_action_date,
-      $details: `از ${prevName} به ${newName}`,
-    }
-  );
+  insertHistoryEvent({
+    case_id: caseId,
+    operation: 'تخصیص مجدد',
+    user_name: userName || 'ادمین',
+    case_status: updated.case_status,
+    next_action: updated.next_action,
+    next_action_date: updated.next_action_date,
+    details: `از ${prevName} به ${newName}`,
+  });
 }
 
 function checkCapacity(negotiator, excludeCaseId, batchExtraCount) {

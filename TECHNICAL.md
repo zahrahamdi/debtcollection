@@ -69,10 +69,12 @@ backend/src/
 │   ├── auth.service.js       # JWT, bcrypt, RBAC helpers
 │   ├── cases.service.js      # listCases, getCaseById, assignCase, submitCallOutcome ★
 │   ├── reports.service.js    # getCasesReport, getFunnelReport, … ★
+│   ├── strategy-attribution.service.js  # tenure پرونده روی هر استراتژی ★
 │   ├── strategy-engine.service.js
 │   ├── case-import.service.js
 │   ├── payment-import.service.js
 │   ├── bulk-assign.service.js
+│   ├── maintenance.service.js           # `.pending-maintenance.json` در startup
 │   ├── sms.service.js
 │   ├── scheduler.js
 │   └── debtor-cleanup.service.js
@@ -133,11 +135,12 @@ backend/src/
 
 | سرویس | مسئولیت |
 |--------|---------|
-| `case-import.service.js` | پردازش هر ردیف Excel: ایجاد/آپدیت پرونده، CEI، سگمنت، استراتژی |
-| `cases.service.js` | لیست paginated، جزئیات، تخصیص، ثبت خروجی تماس (+ validation paid/burned، anti double-submit) |
 | `reports.service.js` | aggregation گزارشات — KPI، funnel، عملکرد، هزینه، مذاکره‌کنندگان |
+| `strategy-attribution.service.js` | بازسازی tenure هر پرونده روی هر استراتژی از `case_events` |
 | `strategy-engine.service.js` | اجرای اقدام‌های خودکار، تکرار شرطی، شکست استراتژی |
-| `payment-import.service.js` | ثبت پرداخت جزئی/کامل، به‌روزرسانی مالی، resume استراتژی |
+| `payment-import.service.js` | ثبت پرداخت جزئی/کامل، پرداخت جزئی قبل از سررسید تعهد، resume استراتژی |
+| `case-import.service.js` | پردازش Excel، CEI، سگمنت، استراتژی، **Respite Time**، `processDeferredCeiStrategyShifts` |
+| `cases.service.js` | لیست paginated، جزئیات، تخصیص، ثبت خروجی تماس |
 | `sms.service.js` | `sendSms` (Kavenegar یا `SMS_MOCK`), placeholder `{نام_کاربر}`, `{مبلغ_مطالبات}`, `{لینک_پرداخت}`. **نتیجه delivery** در موتور استراتژی جداگانه Mock می‌شود. |
 
 ### ۲.۳ `lastAction.js` — آخرین اقدام پرونده
@@ -182,6 +185,7 @@ frontend/src/
 │   └── reports.js, cases.js, …
 └── utils/
     ├── auth.js               # getToken, isAdmin, hasPermission, logout ★
+    └── historyDetails.js     # formatHistoryDetailsLines — جزئیات فارسی ★
 ```
 
 **نمودارها (Recharts):** کانتینر LTR (`ChartContainer`) برای جلوگیری از clip در RTL؛ محور عددی با ارقام لاتین؛ برچسب فارسی با `foreignObject`. رنگ ثابت اقدامات در `actionPieConfig.js`.
@@ -196,10 +200,13 @@ frontend/src/
 | استراتژی‌ها → Funnel | React Flow | `GET /reports/funnel` |
 | مذاکره‌کنندگان | جدول + pie دلایل عدم پرداخت | `GET /reports/negotiators` |
 
-هر تب فیلتر مستقل دارد (بازه شمسی، نوع اعتبار، …). دسترسی: `isAdmin()` — در غیر این صورت `<Navigate to="/cases" />`.
+هر تب فیلتر مستقل دارد (بازه شمسی، نوع اعتبار، …). دسترسی: `authorize('reports','view')`.
+
+**راهنمای ستون‌ها (تب هزینه/وصول):** tooltip در UI — «تعداد وصول» vs «نرخ تبدیل» (اجراهای یکتا).
 
 **اتصال API:** `frontend/src/api/client.js` → `baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api'`  
-**Env:** `frontend/.env` → `VITE_API_URL=http://localhost:3000/api`
+**Env:** `frontend/.env` → `VITE_API_URL=http://localhost:3000/api`  
+**Vite:** `vite.config.js` — `server.port: 5173`, `strictPort: true`
 
 **کنترل دسترسی UI (`hasPermission`):**
 
@@ -379,7 +386,9 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 - پرداخت کامل → `paid`
 - پرداخت جزئی → به‌روزرسانی مالی + زمان‌بندی resume استراتژی
+- **پرداخت جزئی قبل از سررسید تعهد** — اگر مبلغ &lt; تعهد pending و قبل از `promised_datetime`: CEI/سگمنت به‌روز، وضعیت در فاز مذاکره؛ history با برچسب `پرداخت جزئی قبل از سررسید تعهد`
 - `processDuePartialPaymentResumes()` در هر tick موتور
+- `processDeferredCeiStrategyShifts()` **قبل** اجرای اکشن‌ها در موتور و ابتدای import
 
 ### ۵.۴ تخصیص پرونده
 
@@ -390,6 +399,42 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 - **تخصیص اولیه:** `last_action = 'تخصیص به مذاکره‌کننده'`, `last_action_date = todayJalali()` + `case_history`
 - **تخصیص مجدد:** فقط `assigned_negotiator_id` — `last_action` از resolve باقی می‌ماند
 - history: «تخصیص به مذاکره‌کننده» / «تخصیص مجدد»
+
+### ۵.۵ گزارشات (Reports)
+
+**فایل‌ها:** `reports.service.js` · `strategy-attribution.service.js` · `frontend/src/pages/Reports.jsx`
+
+#### نسبت‌دهی استراتژی (tenure)
+
+پرونده‌ای که از استراتژی سبک به سنگین رفته در **هر دو** شمرده می‌شود. تایم‌لاین از `case_events` ساخته می‌شود:
+
+- `تخصیص استراتژی` · `به‌روزرسانی CEI و استراتژی` · `تغییر استراتژی پس از پرداخت جزئی`
+- `اعمال تغییر استراتژی معوق` · `strategy_failure`
+
+| شاخص (عملکرد استراتژی) | منطق |
+|--------------------------|------|
+| `total_cases` | پرونده‌هایی که حداقل یک tenure روی آن استراتژی دارند |
+| `success_rate` | پرونده‌های با **پرداخت کامل** (`payment_type = full`) داخل tenure ÷ `total_cases` |
+| `avg_days_to_payment` | فاصله تا اولین پرداخت کامل داخل tenure |
+| `total_cost` | مجموع هزینه اقدامات داخل tenure |
+| `total_collected` | مجموع پرداخت‌های جزئی/کامل داخل tenure |
+
+با فیلتر `strategy_id` در تب هزینه/وصول، همان منطق tenure اعمال می‌شود.
+
+#### هزینه و وصول به تفکیک اقدام
+
+| فیلد API | معنی |
+|----------|------|
+| `execution_count` | تعداد اجرای آن `action_type` |
+| `payment_count` | تعداد **پرداخت‌ها** (هر پرداخت جدا) نسبت‌داده‌شده به آخرین اقدام تبدیل قبل از پرداخت |
+| `conversion_rate` | اجراهای **یکتا** با حداقل یک وصول ÷ `execution_count` — دو پرداخت بعد از یک اجرا = یک واحد در نرخ تبدیل |
+| `total_collected` | مبلغ وصول نسبت‌داده‌شده |
+
+تابع کلیدی: `lastConversionActionBeforePayment()` در `reports.service.js`.
+
+#### تاریخچه در UI
+
+`frontend/src/utils/historyDetails.js` — جزئیات فارسی برای عملیات از جمله `پرداخت جزئی قبل از سررسید تعهد`.
 
 ---
 
@@ -537,6 +582,7 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 
 **نکات محاسباتی:**
 - `cost_to_collection_ratio` = `total_cost / total_collected` (عدد اعشاری، نه درصد)
+- عملکرد استراتژی و A/B: tenure-based — ر.ک. [§۵.۵](#۵۵-گزارشات-reports)
 - Funnel: تشخیص خروجی هر مرحله با `firstOutcomeAfterAction` و پرداخت/شکست استراتژی
 - `success_rate` مذاکره‌کننده = `paid_cases / total_cases × 100`
 
@@ -560,8 +606,9 @@ cost = isNoAnswer ? 0 : Math.round((hourly_wage * callDuration) / 60);
 | `cases` | پرونده وصول — قلب سیستم |
 | `segments`, `strategies`, `strategy_actions` | سگمنت و استراتژی |
 | `ab_tests` | A/B Test |
-| `case_actions` | سابقه اقدامات (seq زمانی global) |
-| `case_history` | Audit Trail |
+| `case_events` | **منبع اصلی** اقدامات + تاریخچه + پرداخت (`event_type`: action, history, payment) |
+| `case_actions` | legacy — خواندن برای سازگاری |
+| `case_history` | legacy — خواندن برای سازگاری |
 | `promises` | تعهد پرداخت (PTP) |
 | `installments`, `payments` | اقساط و پرداخت |
 | `negotiators` | موجودیت عملیاتی + `user_id` → `users` |
@@ -636,6 +683,11 @@ cost, avg_call_duration
 | `seed-zahra-hamdi-cases.js` | seed تست |
 | `add-payment-test-cases.js` | پرونده تست پرداخت |
 | `clear-ab-tests.js` | پاک کردن A/B tests |
+| `clear-all-cases.js` | حذف همه پرونده‌ها و بدهکاران (`npm run clear-all-cases`) |
+
+**نگهداری در startup:** فایل `backend/.pending-maintenance.json` با `"tasks": ["clear_all_cases"]` — `maintenance.service.js`
+
+**نمونه Excel/TSV:** `google-sheet-samples/` (cases، payments، bulk-assign، bulk-reassign)
 
 ---
 
@@ -654,7 +706,9 @@ cost, avg_call_duration
 - `عبور به اقدام بعدی استراتژی` / `پایان استراتژی` / `شکست استراتژی`
 - `بازگشت به تماس مذاکره‌کننده` / `ثبت خروجی تماس`
 - `تخصیص به مذاکره‌کننده` / `تخصیص مجدد`
-- `پرداخت کامل بدهی` / `پرداخت جزئی بدهی` / `ادامه استراتژی پس از پرداخت جزئی`
+- `پرداخت کامل بدهی` / `پرداخت جزئی بدهی` / `پرداخت جزئی قبل از سررسید تعهد`
+- `ادامه استراتژی پس از پرداخت جزئی` / `تغییر استراتژی پس از پرداخت جزئی`
+- `تأخیر تغییر استراتژی (Respite Time)` / `اعمال تغییر استراتژی معوق`
 
 لیست کامل: آرایه `HISTORY_OPERATIONS` در `constants.js` (۳۲+ عملیات).
 
@@ -767,4 +821,4 @@ requireCallOutcomeAccess                // admin همه · negotiator فقط ass
 
 ---
 
-*آخرین به‌روزرسانی: RBAC enforce · service layer (cases/reports) · pagination SQL · hasPermission UI · VITE_API_URL*
+*آخرین به‌روزرسانی: نسبت‌دهی tenure گزارشات · جزئیات فارسی تاریخچه · Respite Time · case_events · clear-all-cases*

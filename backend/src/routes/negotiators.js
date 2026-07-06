@@ -53,17 +53,16 @@ const NEGOTIATOR_SELECT = `
   LEFT JOIN users u ON u.id = n.user_id
 `;
 
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const rows = query(`${NEGOTIATOR_SELECT} ORDER BY n.id ASC`);
     res.json({ data: rows.map(mapNegotiatorRow) });
   } catch (err) {
-    console.error('[GET /api/negotiators]', err);
-    res.status(500).json({ error: 'خطا در دریافت مذاکره‌کنندگان' });
+    next(err);
   }
 });
 
-router.post('/', authorize('negotiators', 'create'), (req, res) => {
+router.post('/', authorize('negotiators', 'create'), (req, res, next) => {
   try {
     const { user_id, capacity, cooperation_type, hourly_wage } = req.body || {};
     const uid = Number(user_id);
@@ -104,12 +103,11 @@ router.post('/', authorize('negotiators', 'create'), (req, res) => {
     const rows = query(`${NEGOTIATOR_SELECT} WHERE n.id = $id`, { $id: lastInsertRowid });
     res.status(201).json({ data: mapNegotiatorRow(rows[0]) });
   } catch (err) {
-    console.error('[POST /api/negotiators]', err);
-    res.status(500).json({ error: 'خطا در ایجاد مذاکره‌کننده' });
+    next(err);
   }
 });
 
-router.put('/:id', authorize('negotiators', 'edit'), (req, res) => {
+router.put('/:id', authorize('negotiators', 'edit'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM negotiators WHERE id = $id', { $id: id });
@@ -140,8 +138,7 @@ router.put('/:id', authorize('negotiators', 'edit'), (req, res) => {
     const rows = query(`${NEGOTIATOR_SELECT} WHERE n.id = $id`, { $id: id });
     res.json({ data: mapNegotiatorRow(rows[0]) });
   } catch (err) {
-    console.error('[PUT /api/negotiators/:id]', err);
-    res.status(500).json({ error: 'خطا در ویرایش مذاکره‌کننده' });
+    next(err);
   }
 });
 

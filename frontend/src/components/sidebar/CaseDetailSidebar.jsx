@@ -14,8 +14,8 @@ import {
 } from 'lucide-react'
 import Badge from '../table/Badge'
 import { fetchCaseById } from '../../api/cases'
-import { formatRial, formatJalaliDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
-import { getCurrentUser, hasPermission, isAdmin, isNegotiator } from '../../utils/auth'
+import { formatRial, formatJalaliDateTime, formatSqliteDateTime, jalaliDateTimeStyle, toFaDigits, orDash } from '../../utils/format'
+import { useAuth } from '../../context/AuthContext'
 import {
   caseStatusLabel,
   caseStatusTone,
@@ -56,6 +56,7 @@ function actionIconKey(actionType) {
 }
 
 function actionDisplayTitle(action, idx) {
+  if (action.label) return action.label
   if (action.action_type === 'payment_full') return 'پرداخت کامل'
   if (action.action_type === 'payment_partial') return 'پرداخت جزئی'
   if (action.action_type === 'strategy_failure') return 'شکست استراتژی'
@@ -68,21 +69,22 @@ function isPaymentAction(actionType) {
 
 const NEGOTIATOR_CALL_STATUSES = ['pending_negotiator_call', 'pending_negotiator_recall', 'in_negotiation']
 
-function canUserRegisterCall(detail) {
-  if (!detail || !hasPermission('call_outcome', 'create')) return false
-  if (isAdmin()) return true
-  const user = getCurrentUser()
-  if (
-    isNegotiator(user) &&
-    detail.assigned_negotiator_id != null &&
-    Number(detail.assigned_negotiator_id) === Number(user.negotiator_id)
-  ) {
-    return true
-  }
-  return false
-}
+function canRegisterCall(detail, auth) {
+  const { hasPermission, isAdmin, isNegotiator, user } = auth
 
-function canRegisterCall(detail) {
+  const canUserRegisterCall = () => {
+    if (!detail || !hasPermission('call_outcome', 'create')) return false
+    if (isAdmin()) return true
+    if (
+      isNegotiator() &&
+      detail.assigned_negotiator_id != null &&
+      Number(detail.assigned_negotiator_id) === Number(user?.negotiator_id)
+    ) {
+      return true
+    }
+    return false
+  }
+
   const maxCalls =
     Number(detail.max_call_count) || Number(detail.negotiator_stage?.max_repeat) || 3
   const attempts = Number(detail.current_action_repeat) || 0
@@ -91,7 +93,7 @@ function canRegisterCall(detail) {
     Boolean(detail) &&
     NEGOTIATOR_CALL_STATUSES.includes(detail.case_status) &&
     ['overdue', 'due_today'].includes(detail.action_status) &&
-    canUserRegisterCall(detail)
+    canUserRegisterCall()
   )
 }
 
@@ -108,12 +110,29 @@ function actionResultLabel(action, detail) {
   return NEGOTIATOR_RESULT_BY_STATUS[detail.case_status] || orDash(action.result)
 }
 
-function DateDisplay({ value }) {
-  return <span style={jalaliDateTimeStyle}>{formatJalaliDateTime(value)}</span>
+function DateDisplay({ value, withTime }) {
+  if (!value) return <>—</>
+  const en = String(value).trim()
+  const isIsoTimestamp = /^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}/.test(en)
+  const formatted =
+    isIsoTimestamp || withTime ? formatSqliteDateTime(value) : formatJalaliDateTime(value)
+  return <span style={jalaliDateTimeStyle}>{formatted}</span>
 }
 
 // وضعیت تعهد پرداخت (بخش ۵.۸ PRD)
 function promiseLabel(detail) {
+  const promises = detail.promises || []
+  if (detail.case_status === 'paid') {
+    const fulfilled = promises.find((p) => p.status === 'fulfilled')
+    if (fulfilled) {
+      return (
+        <>
+          عمل‌شده — سررسید <DateDisplay value={fulfilled.promised_datetime} />
+        </>
+      )
+    }
+    return 'عمل‌شده'
+  }
   if (detail.active_promise) {
     return (
       <>
@@ -121,7 +140,15 @@ function promiseLabel(detail) {
       </>
     )
   }
-  const lastBroken = (detail.promises || []).find((p) => p.status === 'broken')
+  const fulfilled = promises.find((p) => p.status === 'fulfilled')
+  if (fulfilled) {
+    return (
+      <>
+        عمل‌شده — سررسید <DateDisplay value={fulfilled.promised_datetime} />
+      </>
+    )
+  }
+  const lastBroken = promises.find((p) => p.status === 'broken')
   if (lastBroken) {
     return (
       <>
@@ -133,6 +160,7 @@ function promiseLabel(detail) {
 }
 
 export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onRegisterCall }) {
+  const auth = useAuth()
   const open = Boolean(caseId)
   const navigate = useNavigate()
   const [detail, setDetail] = useState(null)
@@ -364,7 +392,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
 
               {/* سابقه اقدامات روی پرونده */}
               <SectionTitle>سابقه اقدامات روی پرونده</SectionTitle>
-              {visibleActions.length || canRegisterCall(detail) ? (
+              {visibleActions.length || canRegisterCall(detail, auth) ? (
                 <ol className="space-y-3">
                   {visibleActions.map((a, idx) => {
                     const Icon = iconFor(actionIconKey(a.action_type))
@@ -383,7 +411,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                               className="text-[11px] text-slate-400"
                               style={jalaliDateTimeStyle}
                             >
-                              <DateDisplay value={a.action_date} />
+                              <DateDisplay value={a.action_date} withTime />
                             </span>
                           </div>
                           {a.body_text && (
@@ -406,7 +434,7 @@ export default function CaseDetailSidebar({ caseId, refreshToken, onClose, onReg
                     )
                   })}
 
-                  {canRegisterCall(detail) && (
+                  {canRegisterCall(detail, auth) && (
                     <li className="flex gap-3">
                       <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600">
                         <PhoneCall className="h-4 w-4" />

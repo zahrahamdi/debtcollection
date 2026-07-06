@@ -252,6 +252,10 @@ CREATE TABLE IF NOT EXISTS installments (
   status             TEXT,                                 -- وضعیت قسط
   payment_status     TEXT    NOT NULL DEFAULT 'unpaid',    -- unpaid | paid
   payment_date       TEXT,                                 -- تاریخ پرداخت
+  penalty_waiver     INTEGER NOT NULL DEFAULT 0,
+  bank_settlement    INTEGER NOT NULL DEFAULT 0,
+  guarantee_withdrawal INTEGER NOT NULL DEFAULT 0,
+  debt_class         TEXT    NOT NULL DEFAULT '',
   FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE
 );
 
@@ -269,7 +273,29 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 
 -- ---------------------------------------------------------------------
--- تاریخچه تغییرات پرونده (Audit Trail)
+-- رویدادهای یکپارچه پرونده (جایگزین منطقی case_actions + case_history)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS case_events (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id          INTEGER NOT NULL,
+  event_type       TEXT    NOT NULL,
+  action_type      TEXT,
+  label            TEXT    NOT NULL,
+  result           TEXT,
+  details          TEXT,
+  user_name        TEXT    NOT NULL DEFAULT 'سیستم',
+  seq              INTEGER,
+  repeat_count     INTEGER NOT NULL DEFAULT 0,
+  cost             INTEGER NOT NULL DEFAULT 0,
+  next_action      TEXT,
+  next_action_date TEXT,
+  case_status      TEXT,
+  created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE
+);
+
+-- ---------------------------------------------------------------------
+-- تاریخچه تغییرات پرونده (Audit Trail) — legacy، دیگر insert نشود
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS case_history (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,8 +313,7 @@ CREATE TABLE IF NOT EXISTS case_history (
 );
 
 -- ---------------------------------------------------------------------
--- سابقه اقدامات اجراشده روی پرونده (Action History — بخش ۳.۲ PRD)
--- ترتیب اجرا در استراتژی با ستون seq نگه داشته می‌شود.
+-- سابقه اقدامات — legacy، دیگر insert نشود
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS case_actions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -400,5 +425,9 @@ CREATE INDEX IF NOT EXISTS idx_installments_case   ON installments(case_id);
 CREATE INDEX IF NOT EXISTS idx_payments_case       ON payments(case_id);
 CREATE INDEX IF NOT EXISTS idx_history_case        ON case_history(case_id);
 CREATE INDEX IF NOT EXISTS idx_actions_case        ON case_actions(case_id);
+CREATE INDEX IF NOT EXISTS idx_cases_status_negotiator ON cases(case_status, assigned_negotiator_id);
+CREATE INDEX IF NOT EXISTS idx_cases_next_action_date ON cases(next_action_date, case_status);
+CREATE INDEX IF NOT EXISTS idx_case_events_case_id ON case_events(case_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_promises_case_status ON promises(case_id, status);
 CREATE INDEX IF NOT EXISTS idx_promises_case       ON promises(case_id);
 CREATE INDEX IF NOT EXISTS idx_files_case          ON case_files(case_id);

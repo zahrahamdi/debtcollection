@@ -48,7 +48,7 @@ function serialize(seg) {
  * GET /api/segments
  * لیست سگمنت‌ها به تفکیک نوع اعتبار، به همراه تعداد پرونده فعال هر سگمنت.
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const data = {};
     for (const t of CREDIT_TYPES) {
@@ -60,8 +60,7 @@ router.get('/', (req, res) => {
     }
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/segments]', err);
-    res.status(500).json({ error: 'خطا در دریافت سگمنت‌ها' });
+    next(err);
   }
 });
 
@@ -69,7 +68,7 @@ router.get('/', (req, res) => {
  * POST /api/segments
  * ایجاد سگمنت جدید با بررسی نام تکراری و همپوشانی (AC2).
  */
-router.post('/', authorize('admin_panel', 'edit'), (req, res) => {
+router.post('/', authorize('admin_panel', 'edit'), (req, res, next) => {
   try {
     const { title, credit_type, condition_type, cei_x, cei_y } = req.body || {};
     const cleanTitle = (title || '').trim();
@@ -101,8 +100,7 @@ router.post('/', authorize('admin_panel', 'edit'), (req, res) => {
     const rows = query('SELECT * FROM segments WHERE id = $id', { $id: lastInsertRowid });
     res.status(201).json({ data: serialize(rows[0]) });
   } catch (err) {
-    console.error('[POST /api/segments]', err);
-    res.status(500).json({ error: 'خطا در ایجاد سگمنت' });
+    next(err);
   }
 });
 
@@ -110,7 +108,7 @@ router.post('/', authorize('admin_panel', 'edit'), (req, res) => {
  * PUT /api/segments/:id
  * ویرایش سگمنت (عنوان، شرط) با بررسی مجدد نام تکراری و همپوشانی.
  */
-router.put('/:id', authorize('admin_panel', 'edit'), (req, res) => {
+router.put('/:id', authorize('admin_panel', 'edit'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM segments WHERE id = $id', { $id: id });
@@ -146,8 +144,7 @@ router.put('/:id', authorize('admin_panel', 'edit'), (req, res) => {
     const rows = query('SELECT * FROM segments WHERE id = $id', { $id: id });
     res.json({ data: serialize(rows[0]) });
   } catch (err) {
-    console.error('[PUT /api/segments/:id]', err);
-    res.status(500).json({ error: 'خطا در ویرایش سگمنت' });
+    next(err);
   }
 });
 
@@ -155,7 +152,7 @@ router.put('/:id', authorize('admin_panel', 'edit'), (req, res) => {
  * DELETE /api/segments/:id
  * حذف سگمنت — اگر پرونده فعال داشته باشد مجاز نیست (AC5).
  */
-router.delete('/:id', authorize('admin_panel', 'edit'), (req, res) => {
+router.delete('/:id', authorize('admin_panel', 'edit'), (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const existing = query('SELECT * FROM segments WHERE id = $id', { $id: id });
@@ -168,8 +165,7 @@ router.delete('/:id', authorize('admin_panel', 'edit'), (req, res) => {
     run('DELETE FROM segments WHERE id = $id', { $id: id });
     res.json({ data: { id } });
   } catch (err) {
-    console.error('[DELETE /api/segments/:id]', err);
-    res.status(500).json({ error: 'خطا در حذف سگمنت' });
+    next(err);
   }
 });
 

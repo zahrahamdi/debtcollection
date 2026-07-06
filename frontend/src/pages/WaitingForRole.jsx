@@ -1,6 +1,8 @@
-import { logout } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 
 export default function WaitingForRole() {
+  const { logout } = useAuth()
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-panel">

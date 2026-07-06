@@ -61,7 +61,7 @@ function activeFormula(creditType) {
  * GET /api/cei-formulas
  * نسخه فعال و تاریخچه نسخه‌ها برای هر نوع اعتبار.
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const data = {};
     for (const t of CREDIT_TYPES) {
@@ -78,8 +78,7 @@ router.get('/', (req, res) => {
     }
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/cei-formulas]', err);
-    res.status(500).json({ error: 'خطا در دریافت فرمول‌های CEI' });
+    next(err);
   }
 });
 
@@ -88,7 +87,7 @@ router.get('/', (req, res) => {
  * ذخیره تغییر فرمول → ساخت نسخه جدید و غیرفعال‌کردن نسخه قبلی (AC1, AC2).
  * body: { credit_type, params, change_note, user_name }
  */
-router.put('/', (req, res) => {
+router.put('/', (req, res, next) => {
   try {
     const { credit_type, params, change_note } = req.body || {};
     const userName = getActorName(req);
@@ -122,8 +121,7 @@ router.put('/', (req, res) => {
     const active = activeFormula(credit_type);
     res.json({ data: { ...active, params: JSON.parse(active.params) } });
   } catch (err) {
-    console.error('[PUT /api/cei-formulas]', err);
-    res.status(500).json({ error: 'خطا در ذخیره فرمول CEI' });
+    next(err);
   }
 });
 
@@ -132,7 +130,7 @@ router.put('/', (req, res) => {
  * پیش‌نمایش CEI برای یک شناسه اعتبار بدون اعمال هیچ تغییری (AC9).
  * body: { credit_type, credit_id }
  */
-router.post('/test', (req, res) => {
+router.post('/test', (req, res, next) => {
   try {
     const { credit_type, credit_id } = req.body || {};
     if (!CREDIT_TYPES.includes(credit_type)) {
@@ -174,8 +172,7 @@ router.post('/test', (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[POST /api/cei-formulas/test]', err);
-    res.status(500).json({ error: 'خطا در محاسبه پیش‌نمایش CEI' });
+    next(err);
   }
 });
 

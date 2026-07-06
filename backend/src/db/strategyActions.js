@@ -32,8 +32,27 @@ function parseRepeatOnResults(action) {
   }
 }
 
-function serializeRepeatOnResults(raw) {
-  const list = Array.isArray(raw) ? raw.filter(Boolean) : parseRepeatOnResults({ repeat_on_results: raw });
+/** پیش‌فرض رفتار قبلی سیستم وقتی repeat_on_results خالی است */
+function defaultRepeatOnResults(actionType) {
+  if (actionType === 'warning_sms' || actionType === 'threatening_sms') return ['ارسال نشد'];
+  if (actionType === 'warning_autocall' || actionType === 'threatening_autocall') {
+    return ['پاسخگو نبود', 'اشغال بود'];
+  }
+  if (actionType === 'negotiator_call') return ['پاسخگو نبود'];
+  return [];
+}
+
+function effectiveRepeatOnResults(action) {
+  const parsed = parseRepeatOnResults(action);
+  if (parsed.length > 0) return parsed;
+  return defaultRepeatOnResults(action?.action_type);
+}
+
+function serializeRepeatOnResults(raw, actionType) {
+  let list = Array.isArray(raw) ? raw.filter(Boolean) : parseRepeatOnResults({ repeat_on_results: raw });
+  if (!list.length && actionType) {
+    list = defaultRepeatOnResults(actionType);
+  }
   return JSON.stringify(list);
 }
 
@@ -106,7 +125,7 @@ function replaceActions(strategyId, actions) {
             : 60,
         $cost: Number(a.cost) || 0,
         $rep: a.max_repeat != null && a.max_repeat !== '' ? Number(a.max_repeat) : 3,
-        $repeatOn: serializeRepeatOnResults(a.repeat_on_results),
+        $repeatOn: serializeRepeatOnResults(a.repeat_on_results, a.action_type),
         $dur:
           a.avg_call_duration != null && a.avg_call_duration !== ''
             ? Number(a.avg_call_duration)
@@ -123,5 +142,7 @@ module.exports = {
   validateActions,
   replaceActions,
   parseRepeatOnResults,
+  defaultRepeatOnResults,
+  effectiveRepeatOnResults,
   serializeRepeatOnResults,
 };

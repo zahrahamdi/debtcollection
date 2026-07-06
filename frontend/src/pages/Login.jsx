@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { login } from '../api/auth'
-import { hasAnyRole, isAdmin } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 export default function Login() {
   const navigate = useNavigate()
+  const { login } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -23,8 +23,7 @@ export default function Login() {
     try {
       const user = await login(username.trim(), password)
       toast.success('ورود موفق')
-      if (!hasAnyRole(user)) navigate('/waiting', { replace: true })
-      else if (isAdmin(user)) navigate('/cases', { replace: true })
+      if (!user?.roles?.length) navigate('/waiting', { replace: true })
       else navigate('/cases', { replace: true })
     } catch (err) {
       toast.error(err?.response?.data?.error ?? 'خطا در ورود')

@@ -76,12 +76,14 @@ export default function Installments() {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-panel">
         <p className="text-sm text-slate-500">
-          پرونده‌ای انتخاب نشده است. از{' '}
-          <Link to="/cases" className="font-medium text-brand-600 hover:text-brand-700">
-            لیست پرونده‌ها
-          </Link>{' '}
-          یک پرونده را باز کرده و «مشاهده لیست اقساط» را انتخاب کنید.
+          لطفاً از طریق ساید بار پرونده وارد این صفحه شوید.
         </p>
+        <Link
+          to="/cases"
+          className="mt-6 inline-block rounded-xl bg-brand-600 px-6 py-2 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          بازگشت به پرونده‌ها
+        </Link>
       </div>
     )
   }

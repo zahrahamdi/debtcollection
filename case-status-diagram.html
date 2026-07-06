@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>دیاگرام وضعیت پرونده — DigiPay وصول مطالبات</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface2: #243044;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --gray: #64748b;
+      --blue: #38bdf8;
+      --amber: #fbbf24;
+      --green: #34d399;
+      --red: #f87171;
+      --accent: #818cf8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Vazirmatn', Tahoma, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #1e293b 0%, #0f172a 60%, #1e1b4b 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 2.5rem 1.5rem 2rem;
+    }
+
+    .hero h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .hero p {
+      color: var(--muted);
+      max-width: 52rem;
+      font-size: 0.95rem;
+    }
+
+    .hero .meta {
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: var(--gray);
+    }
+
+    main {
+      max-width: 72rem;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    section h2::before {
+      content: '';
+      width: 4px;
+      height: 1.1rem;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot.gray { background: var(--gray); }
+    .dot.blue { background: var(--blue); }
+    .dot.amber { background: var(--amber); }
+    .dot.green { background: var(--green); }
+    .dot.red { background: var(--red); }
+
+    .mermaid-wrap {
+      background: #fff;
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    input[type="search"], select {
+      font-family: inherit;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      min-width: 14rem;
+    }
+
+    input[type="search"]:focus, select:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+      gap: 0.75rem;
+    }
+
+    .status-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+
+    .status-card:hover, .status-card.active {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .status-card .key {
+      font-size: 0.72rem;
+      color: var(--gray);
+      font-family: ui-monospace, monospace;
+      direction: ltr;
+      text-align: left;
+    }
+
+    .status-card .label {
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin: 0.25rem 0 0.5rem;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-weight: 500;
+    }
+
+    .badge.gray { background: rgba(100,116,139,.25); color: #cbd5e1; }
+    .badge.blue { background: rgba(56,189,248,.2); color: #7dd3fc; }
+    .badge.amber { background: rgba(251,191,36,.2); color: #fcd34d; }
+    .badge.green { background: rgba(52,211,153,.2); color: #6ee7b7; }
+    .badge.red { background: rgba(248,113,113,.2); color: #fca5a5; }
+
+    .transitions {
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+    }
+
+    .transitions li {
+      margin-bottom: 0.35rem;
+      color: var(--muted);
+      list-style: none;
+      padding-right: 0.75rem;
+      position: relative;
+    }
+
+    .transitions li::before {
+      content: '←';
+      position: absolute;
+      right: 0;
+      color: var(--accent);
+      font-size: 0.75rem;
+    }
+
+    .transitions .target {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .transitions .trigger {
+      color: var(--blue);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      padding: 0.6rem 0.75rem;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface2);
+      color: var(--muted);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+
+    tr:hover td { background: rgba(129,140,248,.06); }
+
+    .mono { font-family: ui-monospace, monospace; font-size: 0.78rem; direction: ltr; text-align: left; }
+
+    .detail-panel {
+      background: var(--surface2);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-top: 1rem;
+      display: none;
+    }
+
+    .detail-panel.visible { display: block; }
+
+    .detail-panel h3 { margin-bottom: 0.75rem; font-size: 1rem; }
+
+    .flow-note {
+      font-size: 0.85rem;
+      color: var(--muted);
+      background: rgba(129,140,248,.08);
+      border-right: 3px solid var(--accent);
+      padding: 0.75rem 1rem;
+      border-radius: 0 8px 8px 0;
+      margin-top: 1rem;
+    }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 1.35rem; }
+      .status-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <h1>دیاگرام وضعیت پرونده (Case Status)</h1>
+    <p>
+      این سند بر اساس پیاده‌سازی فعلی backend (<code>strategy-engine</code>، <code>cases.service</code>،
+      <code>payment-import</code>، <code>case-import</code>) تهیه شده است.
+      هر ردیف نشان می‌دهد از یک وضعیت با چه <strong>اکشن/رویدادی</strong> به وضعیت بعدی می‌رویم.
+    </p>
+    <p class="meta">
+      منبع برچسب‌ها: frontend/src/utils/constants.js · PRD بخش ۶.۱ ·
+      آخرین همگام‌سازی: تیر ۱۴۰۵ (Respite Time، پرداخت جزئی قبل از تعهد، case_events)
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>راهنمای رنگ</h2>
+      <div class="legend">
+        <span class="legend-item"><span class="dot gray"></span> آماده‌سازی / استراتژی</span>
+        <span class="legend-item"><span class="dot blue"></span> پیامک / تماس خودکار</span>
+        <span class="legend-item"><span class="dot amber"></span> مذاکره‌کننده</span>
+        <span class="legend-item"><span class="dot green"></span> پایانی — پرداخت</span>
+        <span class="legend-item"><span class="dot red"></span> پایانی / حقوقی</span>
+      </div>
+    </section>
+
+    <section>
+      <h2>نمای کلی (State Diagram)</h2>
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+stateDiagram-v2
+  direction TB
+
+  [*] --> pending_cei: ورود Excel / ایجاد پرونده
+
+  pending_cei --> pending_strategy: محاسبه CEI (پرونده جدید)
+  pending_strategy --> pending_strategy_start: تخصیص استراتژی (اکشن غیر مذاکره)
+  pending_strategy --> pending_negotiator_assignment: تخصیص استراتژی (اولین اکشن = تماس مذاکره)
+  pending_strategy --> pending_negotiator_call: تخصیص استراتژی + مذاکره‌کننده از قبل
+
+  state "فاز استراتژی خودکار" as auto {
+    pending_strategy_start --> pending_sms_result: اجرای پیامک (موفق/ادامه)
+    pending_strategy_start --> pending_sms_retry: اجرای پیامک (تکرار)
+    pending_strategy_start --> pending_autocall_result: اجرای تماس خودکار
+    pending_strategy_start --> pending_autocall_retry: تماس خودکار (تکرار)
+    pending_strategy_start --> pending_negotiator_assignment: اکشن negotiator_call
+    pending_strategy_start --> pending_negotiator_call: negotiator_call + مذاکره‌کننده دارد
+
+    pending_strategy_continue --> pending_sms_result
+    pending_strategy_continue --> pending_sms_retry
+    pending_strategy_continue --> pending_autocall_result
+    pending_strategy_continue --> pending_autocall_retry
+    pending_strategy_continue --> pending_negotiator_assignment
+    pending_strategy_continue --> pending_negotiator_call
+
+    pending_sms_retry --> pending_sms_result: ارسال مجدد → نتیجه
+    pending_sms_retry --> pending_strategy_continue: سقف تکرار پر شد
+    pending_autocall_retry --> pending_autocall_result
+    pending_autocall_retry --> pending_strategy_continue: سقف تکرار پر شد
+
+    pending_sms_result --> pending_strategy_continue: انتظار اکشن بعدی
+    pending_autocall_result --> pending_strategy_continue
+  }
+
+  pending_negotiator_assignment --> pending_negotiator_call: تخصیص مذاکره‌کننده (دستی/گروهی)
+
+  state "فاز مذاکره" as neg {
+    pending_negotiator_call --> in_negotiation: ثبت خروجی تماس
+    in_negotiation --> pending_negotiator_recall: پاسخگو نبود + تکرار
+    in_negotiation --> pending_negotiator_call: سررسید تماس / scheduler
+    pending_negotiator_recall --> pending_negotiator_call: سررسید تماس مجدد
+  }
+
+  in_negotiation --> pending_strategy_continue: سقف تماس پر + اکشن بعدی استراتژی
+  in_negotiation --> pending_legal_assignment: ارجاع حقوقی / شکست آخرین استراتژی
+  in_negotiation --> burned: فوت کاربر
+
+  pending_strategy_continue --> pending_strategy_start: شکست استراتژی → سگمنت بعدی
+  pending_strategy_continue --> pending_legal_assignment: شکست آخرین استراتژی
+
+  in_negotiation --> paid: پرداخت کامل
+  auto --> paid: پرداخت کامل
+  neg --> paid: پرداخت کامل
+
+  in_negotiation --> in_negotiation: پرداخت جزئی (فاز مذاکره)
+  auto --> pending_strategy_start: پرداخت جزئی → resume پس از gap
+  neg --> in_negotiation: پرداخت جزئی → تماس مذاکره + gap
+
+  paid --> pending_cei: مطالبات جدید → پرونده جدید
+  burned --> [*]
+  paid --> [*]
+  pending_legal_assignment --> [*]: تخصیص حقوقی (خارج از موتور)
+        </pre>
+      </div>
+      <p class="flow-note">
+        <strong>توجه:</strong> وضعیت‌های <code>pending_sms_result</code> و <code>pending_autocall_result</code>
+        «منتظر زمان اکشن بعدی» هستند؛ scheduler در سررسید <code>next_action_date</code> اکشن بعدی را اجرا می‌کند
+        و معمولاً به <code>pending_strategy_continue</code> یا فاز مذاکره می‌روند.
+      </p>
+      <p class="flow-note">
+        <strong>Respite Time:</strong> اگر سگمنت/CEI در حین <code>next_action_date</code> فعال عوض شود،
+        تغییر استراتژی با رویداد «تأخیر تغییر استراتژی (Respite Time)» معوق می‌شود و در سررسید
+        <code>respite_until</code> با «اعمال تغییر استراتژی معوق» اجرا می‌شود
+        (<code>processDeferredCeiStrategyShifts</code> — قبل از tick موتور).
+      </p>
+      <p class="flow-note">
+        <strong>پرداخت جزئی قبل از سررسید تعهد:</strong> اگر پرداخت جزئی &lt; مبلغ تعهد و قبل از
+        <code>promised_datetime</code> باشد، وضعیت پرونده معمولاً در فاز مذاکره می‌ماند؛
+        <code>next_action</code> و CEI/سگمنت به‌روز می‌شوند بدون تغییر فوری استراتژی.
+      </p>
+    </section>
+
+    <section>
+      <h2>جزئیات هر وضعیت</h2>
+      <div class="controls">
+        <input type="search" id="search" placeholder="جستجو در وضعیت یا اکشن..." />
+        <select id="toneFilter">
+          <option value="">همه رنگ‌ها</option>
+          <option value="gray">خاکستری — آماده‌سازی</option>
+          <option value="blue">آبی — خودکار</option>
+          <option value="amber">کهربایی — مذاکره</option>
+          <option value="green">سبز — پرداخت</option>
+          <option value="red">قرمز — حقوقی/سوخت</option>
+        </select>
+      </div>
+      <div class="status-grid" id="statusGrid"></div>
+      <div class="detail-panel" id="detailPanel"></div>
+    </section>
+
+    <section>
+      <h2>جدول اکشن → تغییر وضعیت</h2>
+      <div style="overflow-x:auto; max-height: 32rem; overflow-y: auto;">
+        <table id="actionTable">
+          <thead>
+            <tr>
+              <th>اکشن / رویداد</th>
+              <th>از وضعیت</th>
+              <th>به وضعیت</th>
+              <th>شرط / توضیح</th>
+              <th>منبع کد</th>
+            </tr>
+          </thead>
+          <tbody id="actionBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const STATUSES = {
+      pending_cei: { label: 'در انتظار محاسبه CEI', tone: 'gray' },
+      pending_strategy: { label: 'در انتظار تخصیص استراتژی', tone: 'gray' },
+      pending_strategy_start: { label: 'در انتظار شروع استراتژی', tone: 'gray' },
+      pending_strategy_continue: { label: 'در انتظار ادامه استراتژی', tone: 'gray' },
+      pending_sms_result: { label: 'در انتظار نتیجه پیامک', tone: 'blue' },
+      pending_sms_retry: { label: 'در انتظار ارسال مجدد پیامک', tone: 'blue' },
+      pending_autocall_result: { label: 'در انتظار نتیجه تماس خودکار', tone: 'blue' },
+      pending_autocall_retry: { label: 'در انتظار تماس خودکار مجدد', tone: 'blue' },
+      pending_negotiator_assignment: { label: 'در انتظار تخصیص به مذاکره‌کننده', tone: 'amber' },
+      pending_negotiator_call: { label: 'در انتظار تماس مذاکره‌کننده', tone: 'amber' },
+      pending_negotiator_recall: { label: 'در انتظار تماس مجدد مذاکره‌کننده', tone: 'amber' },
+      in_negotiation: { label: 'در انتظار نتیجه تماس مذاکره‌کننده', tone: 'amber' },
+      pending_legal_assignment: { label: 'در انتظار تخصیص به حقوقی', tone: 'red' },
+      paid: { label: 'پرداخت شده', tone: 'green' },
+      burned: { label: 'سوخت شده', tone: 'red' },
+    };
+
+    const TRANSITIONS = [
+      {
+        from: 'pending_cei',
+        to: ['pending_strategy'],
+        trigger: 'محاسبه CEI (ورود پرونده جدید)',
+        note: 'پس از import Excel؛ CEI و سپس سگمنت/استراتژی',
+      },
+      {
+        from: 'pending_strategy',
+        to: ['pending_strategy_start', 'pending_negotiator_assignment', 'pending_negotiator_call'],
+        trigger: 'تخصیص استراتژی',
+        note: 'بسته به اولین اکشن استراتژی و وجود مذاکره‌کننده',
+      },
+      {
+        from: 'pending_strategy_start',
+        to: ['pending_sms_result', 'pending_sms_retry', 'pending_autocall_result', 'pending_autocall_retry', 'pending_negotiator_assignment', 'pending_negotiator_call', 'pending_legal_assignment'],
+        trigger: 'scheduler — اجرای اکشن اول استراتژی',
+        note: 'پیامک/تماس خودکار/ارجاع مذاکره یا شکست استراتژی',
+      },
+      {
+        from: 'pending_strategy_continue',
+        to: ['pending_sms_result', 'pending_sms_retry', 'pending_autocall_result', 'pending_autocall_retry', 'pending_negotiator_assignment', 'pending_negotiator_call', 'pending_legal_assignment'],
+        trigger: 'scheduler — اجرای اکشن بعدی',
+        note: 'پس از اتمام انتظار اکشن قبلی',
+      },
+      {
+        from: 'pending_sms_retry',
+        to: ['pending_sms_result', 'pending_sms_retry', 'pending_strategy_continue', 'pending_legal_assignment'],
+        trigger: 'ارسال مجدد پیامک',
+        note: 'تکرار تا max_repeat؛ سپس اکشن بعدی یا شکست',
+      },
+      {
+        from: 'pending_autocall_retry',
+        to: ['pending_autocall_result', 'pending_autocall_retry', 'pending_strategy_continue', 'pending_legal_assignment'],
+        trigger: 'تماس خودکار مجدد',
+        note: 'مشابه پیامک',
+      },
+      {
+        from: 'pending_sms_result',
+        to: ['pending_strategy_continue', 'pending_sms_retry', 'pending_negotiator_assignment', 'pending_negotiator_call'],
+        trigger: 'scheduler — سررسید next_action_date',
+        note: 'اجرای اکشن بعدی در صف استراتژی',
+      },
+      {
+        from: 'pending_autocall_result',
+        to: ['pending_strategy_continue', 'pending_autocall_retry', 'pending_negotiator_assignment', 'pending_negotiator_call'],
+        trigger: 'scheduler — سررسید next_action_date',
+        note: 'اجرای اکشن بعدی',
+      },
+      {
+        from: 'pending_negotiator_assignment',
+        to: ['pending_negotiator_call'],
+        trigger: 'تخصیص مذاکره‌کننده (تکی یا گروهی)',
+        note: 'assignCase / bulk-assign',
+      },
+      {
+        from: 'pending_negotiator_call',
+        to: ['in_negotiation', 'burned', 'pending_legal_assignment'],
+        trigger: 'ثبت خروجی تماس مذاکره‌کننده',
+        note: 'معمولاً → in_negotiation؛ فوت → burned؛ ارجاع → حقوقی',
+      },
+      {
+        from: 'in_negotiation',
+        to: ['pending_negotiator_recall', 'pending_negotiator_call', 'pending_strategy_continue', 'pending_legal_assignment', 'burned', 'paid', 'in_negotiation'],
+        trigger: 'ثبت خروجی تماس / scheduler / پرداخت',
+        note: 'تعهد پرداخت، تماس بعدی، سقف تماس، پرداخت جزئی/کامل، پرداخت جزئی قبل از سررسید تعهد',
+      },
+      {
+        from: 'pending_negotiator_recall',
+        to: ['pending_negotiator_call', 'pending_strategy_continue'],
+        trigger: 'scheduler — سررسید تماس مجدد',
+        note: 'اگر تماس باقی → pending_negotiator_call؛ اگر سقف پر → اکشن بعدی',
+      },
+      {
+        from: 'pending_strategy_continue',
+        to: ['pending_strategy_start', 'pending_legal_assignment'],
+        trigger: 'شکست استراتژی (strategy_failure)',
+        note: 'سگمنت بعدی + استراتژی جدید، یا آخرین سگمنت → حقوقی',
+      },
+      {
+        from: '*',
+        to: ['paid'],
+        trigger: 'ثبت پرداخت کامل',
+        note: 'مطالبات = ۰؛ از هر وضعیت فعال',
+      },
+      {
+        from: 'in_negotiation | pending_negotiator_call | pending_negotiator_recall',
+        to: ['in_negotiation'],
+        trigger: 'ثبت پرداخت جزئی (فاز مذاکره)',
+        note: 'next_action = تماس مذاکره‌کننده؛ next_action_date = تاریخ پرداخت + gap روز',
+      },
+      {
+        from: '* (غیر مذاکره)',
+        to: ['pending_strategy_start'],
+        trigger: 'پرداخت جزئی + سررسید gap',
+        note: 'resumePartialPaymentCase — ادامه/تغییر استراتژی',
+      },
+      {
+        from: 'paid',
+        to: ['pending_cei'],
+        trigger: 'ورود مجدد Excel با مطالبات جدید',
+        note: 'پرونده جدید با previous_case_id',
+      },
+      {
+        from: 'active (import CEI)',
+        to: ['(همان وضعیت)'],
+        trigger: 'تأخیر تغییر استراتژی (Respite Time)',
+        note: 'سگمنت جدید در meta ذخیره؛ strategy_id تا سررسید respite_until عوض نمی‌شود',
+      },
+      {
+        from: 'active',
+        to: ['pending_strategy_start'],
+        trigger: 'اعمال تغییر استراتژی معوق',
+        note: 'پس از respite_until — stepChangeStrategyOnSegmentShift',
+      },
+    ];
+
+    const ACTIONS = [
+      { action: 'ورود Excel — ایجاد پرونده', from: '—', to: 'pending_cei', condition: 'اعتبار جدید یا پس از paid', source: 'case-import.service.js' },
+      { action: 'محاسبه CEI', from: 'pending_cei', to: 'pending_strategy', condition: 'پرونده تازه ایجاد شده', source: 'case-import.service.js' },
+      { action: 'تخصیص استراتژی', from: 'pending_strategy', to: 'pending_strategy_start', condition: 'اولین اکشن ≠ negotiator_call', source: 'case-import.service.js' },
+      { action: 'تخصیص استراتژی', from: 'pending_strategy', to: 'pending_negotiator_assignment', condition: 'اولین اکشن = negotiator_call، بدون مذاکره‌کننده', source: 'case-import.service.js' },
+      { action: 'تخصیص استراتژی', from: 'pending_strategy', to: 'pending_negotiator_call', condition: 'اولین اکشن = negotiator_call + assigned_negotiator_id', source: 'case-import.service.js' },
+      { action: 'اجرای پیامک (موفق — بدون تکرار)', from: 'pending_strategy_start | pending_strategy_continue | pending_sms_retry', to: 'pending_sms_result', condition: 'نتیجه در repeat_on_results نیست یا سقف پر شد', source: 'strategy-engine.service.js' },
+      { action: 'اجرای پیامک (نیاز به تکرار)', from: 'pending_strategy_start | pending_strategy_continue | pending_sms_retry', to: 'pending_sms_retry', condition: 'نتیجه در repeat_on_results + attempts < max_repeat', source: 'strategy-engine.service.js' },
+      { action: 'اجرای تماس خودکار (موفق)', from: 'pending_strategy_start | pending_strategy_continue | pending_autocall_retry', to: 'pending_autocall_result', condition: 'بدون تکرار یا پس از تکرار', source: 'strategy-engine.service.js' },
+      { action: 'اجرای تماس خودکار (تکرار)', from: 'pending_strategy_start | pending_strategy_continue | pending_autocall_retry', to: 'pending_autocall_retry', condition: 'نتیجه نیازمند تکرار', source: 'strategy-engine.service.js' },
+      { action: 'سقف تکرار پیامک/تماس خودکار', from: 'pending_sms_retry | pending_autocall_retry', to: 'pending_strategy_continue', condition: 'اکشن بعدی در استراتژی وجود دارد', source: 'strategy-engine.service.js' },
+      { action: 'اکشن negotiator_call در استراتژی', from: 'pending_strategy_start | pending_strategy_continue', to: 'pending_negotiator_assignment', condition: 'بدون مذاکره‌کننده', source: 'strategy-engine.service.js' },
+      { action: 'اکشن negotiator_call در استراتژی', from: 'pending_strategy_start | pending_strategy_continue', to: 'pending_negotiator_call', condition: 'مذاکره‌کننده از قبل تخصیص یافته', source: 'strategy-engine.service.js' },
+      { action: 'تخصیص مذاکره‌کننده', from: 'pending_negotiator_assignment', to: 'pending_negotiator_call', condition: 'دستی توسط ادمین/سرپرست', source: 'cases.service.js / bulk-assign' },
+      { action: 'ثبت خروجی تماس — تعهد پرداخت', from: 'pending_negotiator_call', to: 'in_negotiation', condition: 'willPay؛ next_action = تماس مذاکره یا اکشن بعدی اگر سقف تماس پر', source: 'cases.service.js' },
+      { action: 'ثبت خروجی تماس — تماس بعدی', from: 'pending_negotiator_call', to: 'in_negotiation', condition: 'تاریخ/ساعت تماس بعدی ثبت شد', source: 'cases.service.js' },
+      { action: 'ثبت خروجی تماس — پاسخگو نبود (تکرار)', from: 'pending_negotiator_call | in_negotiation', to: 'pending_negotiator_recall', condition: 'call_status در repeat_on_results + attempts < max_repeat', source: 'cases.service.js' },
+      { action: 'ثبت خروجی تماس — پاسخگو نبود (سقف)', from: 'pending_negotiator_call | in_negotiation', to: 'in_negotiation', condition: 'سقف تماس پر → next_action = اکشن بعدی استراتژی', source: 'cases.service.js' },
+      { action: 'ثبت خروجی تماس — فوت کاربر', from: 'any active', to: 'burned', condition: 'no_payment_reason = فوت کاربر', source: 'cases.service.js' },
+      { action: 'ثبت خروجی تماس — ارجاع حقوقی', from: 'any active', to: 'pending_legal_assignment', condition: 'refer_to_legal = true', source: 'cases.service.js' },
+      { action: 'scheduler — سررسید تماس/تعهد', from: 'in_negotiation | pending_negotiator_recall', to: 'pending_negotiator_call', condition: 'تماس باقی‌مانده در سقف', source: 'strategy-engine.service.js' },
+      { action: 'scheduler — سررسید + سقف تماس', from: 'in_negotiation | pending_negotiator_recall', to: 'pending_strategy_continue', condition: 'attempts >= max_call_count', source: 'strategy-engine.service.js' },
+      { action: 'شکست استراتژی', from: 'any strategy phase', to: 'pending_strategy_start', condition: 'سگمنت بعدی موجود — CEI boost + استراتژی جدید', source: 'strategy-engine.service.js' },
+      { action: 'شکست آخرین استراتژی', from: 'any strategy phase', to: 'pending_legal_assignment', condition: 'آخرین سگمنت نوع اعتبار', source: 'strategy-engine.service.js' },
+      { action: 'ثبت پرداخت کامل', from: 'any active', to: 'paid', condition: 'outstanding_debt = 0', source: 'payment-import.service.js' },
+      { action: 'ثبت پرداخت جزئی', from: 'in_negotiation | pending_negotiator_call | pending_negotiator_recall', to: 'in_negotiation', condition: 'next_action = تماس مذاکره‌کننده؛ date = پرداخت + partial_payment_gap_days', source: 'payment-import.service.js' },
+      { action: 'پرداخت جزئی قبل از سررسید تعهد', from: 'in_negotiation (با تعهد pending)', to: 'in_negotiation', condition: 'amount < promise؛ قبل از promised_datetime؛ CEI/سگمنت به‌روز', source: 'payment-import.service.js' },
+      { action: 'ثبت پرداخت جزئی', from: 'strategy phases', to: '(همان وضعیت)', condition: 'next_action = ادامه استراتژی پس از پرداخت جزئی؛ resume در سررسید gap', source: 'payment-import.service.js' },
+      { action: 'resume پس از پرداخت جزئی', from: 'any (با next_action resume)', to: 'pending_strategy_start', condition: 'سررسید gap + سگمنت/استراتژی', source: 'payment-import.service.js' },
+      { action: 'تأخیر تغییر استراتژی (Respite Time)', from: 'active case (import CEI)', to: '(همان وضعیت)', condition: 'isInRespiteTime — segment_new در meta، strategy فعلی تا respite_until', source: 'case-import.service.js' },
+      { action: 'اعمال تغییر استراتژی معوق', from: 'active case', to: 'pending_strategy_start', condition: 'respite_until سررسید؛ processDeferredCeiStrategyShifts', source: 'case-import.service.js + strategy-engine.service.js' },
+      { action: 'تغییر CEI / سگمنت (deferred)', from: 'active case', to: 'pending_legal_assignment', condition: 'آخرین سگمنت + شکست استراتژی', source: 'case-import.service.js' },
+    ];
+
+    function renderStatusGrid(filter = '', tone = '') {
+      const grid = document.getElementById('statusGrid');
+      grid.innerHTML = '';
+
+      Object.entries(STATUSES).forEach(([key, meta]) => {
+        if (tone && meta.tone !== tone) return;
+        const t = TRANSITIONS.find((x) => x.from === key || x.from.includes(key));
+        const searchHay = `${key} ${meta.label} ${t?.trigger || ''} ${(t?.to || []).join(' ')}`.toLowerCase();
+        if (filter && !searchHay.includes(filter.toLowerCase())) return;
+
+        const card = document.createElement('div');
+        card.className = 'status-card';
+        card.dataset.key = key;
+
+        const outgoing = TRANSITIONS.filter((tr) => tr.from === key || tr.from.includes(key));
+        let transHtml = '';
+        if (outgoing.length) {
+          transHtml = '<ul class="transitions">' + outgoing.flatMap((tr) =>
+            tr.to.map((target) =>
+              `<li><span class="trigger">${tr.trigger}</span> → <span class="target">${STATUSES[target]?.label || target}</span></li>`
+            )
+          ).join('') + '</ul>';
+        } else if (key === 'paid' || key === 'burned') {
+          transHtml = '<ul class="transitions"><li>وضعیت پایانی — خروج از چرخه وصول</li></ul>';
+        } else if (key === 'pending_legal_assignment') {
+          transHtml = '<ul class="transitions"><li>تخصیص حقوقی دستی — بدون انتقال خودکار در موتور</li></ul>';
+        } else {
+          transHtml = '<ul class="transitions"><li>انتقال از طریق اکشن‌های عمومی (پرداخت، شکست استراتژی)</li></ul>';
+        }
+
+        card.innerHTML = `
+          <div class="key">${key}</div>
+          <div class="label">${meta.label}</div>
+          <span class="badge ${meta.tone}">${meta.tone}</span>
+          ${transHtml}
+        `;
+
+        card.addEventListener('click', () => showDetail(key));
+        grid.appendChild(card);
+      });
+    }
+
+    function showDetail(key) {
+      document.querySelectorAll('.status-card').forEach((c) => c.classList.toggle('active', c.dataset.key === key));
+      const meta = STATUSES[key];
+      const related = ACTIONS.filter((a) => a.from.includes(key) || a.to.includes(key) || a.to === key);
+      const panel = document.getElementById('detailPanel');
+      panel.className = 'detail-panel visible';
+      panel.innerHTML = `
+        <h3>${meta.label} <span class="mono">${key}</span></h3>
+        <p style="color:var(--muted); font-size:0.9rem; margin-bottom:1rem;">
+          ${key === 'paid' || key === 'burned'
+            ? 'این وضعیت ترمینال است و پرونده از scheduler و ثبت تماس خارج می‌شود.'
+            : 'رویدادهای زیر می‌توانند این وضعیت را تغییر دهند یا از آن خارج شوند.'}
+        </p>
+        <table>
+          <thead><tr><th>اکشن</th><th>از</th><th>به</th><th>شرط</th></tr></thead>
+          <tbody>
+            ${related.length ? related.map((r) => `
+              <tr>
+                <td>${r.action}</td>
+                <td class="mono">${r.from}</td>
+                <td class="mono">${r.to}</td>
+                <td>${r.condition}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="4">اکشن اختصاصی مستقیم یافت نشد — جدول پایین را ببینید</td></tr>'}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderActionTable() {
+      const tbody = document.getElementById('actionBody');
+      tbody.innerHTML = ACTIONS.map((r) => `
+        <tr>
+          <td>${r.action}</td>
+          <td class="mono">${r.from}</td>
+          <td class="mono">${r.to}</td>
+          <td>${r.condition}</td>
+          <td class="mono">${r.source}</td>
+        </tr>
+      `).join('');
+    }
+
+    document.getElementById('search').addEventListener('input', (e) => {
+      renderStatusGrid(e.target.value, document.getElementById('toneFilter').value);
+    });
+    document.getElementById('toneFilter').addEventListener('change', (e) => {
+      renderStatusGrid(document.getElementById('search').value, e.target.value);
+    });
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'neutral',
+      flowchart: { useMaxWidth: true, htmlLabels: true },
+      stateDiagram: { useMaxWidth: true },
+    });
+
+    renderStatusGrid();
+    renderActionTable();
+  </script>
+</body>
+</html>

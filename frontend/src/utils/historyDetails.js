@@ -1,5 +1,5 @@
 import { formatRial, toFaDigits, formatJalaliDateTime } from './format'
-import { actionTypeLabel } from './constants'
+import { actionTypeLabel, normalizeHistoryOperation } from './constants'
 
 function parseDetails(raw) {
   if (raw === null || raw === undefined || raw === '') return null
@@ -129,20 +129,28 @@ function formatStrategyFailure(d, text) {
 }
 
 function formatSmsAction(d, text) {
-  const body = d?.body || d?.body_text || d?._text || text
-  return buildLines(hasValue(body) && `متن: ${body}`)
+  const body = d?.body_text || d?.body || d?._text || text
+  return buildLines(
+    hasValue(body) && `متن: ${body}`,
+    hasValue(d?.result) && `نتیجه: ${d.result}`,
+    hasValue(d?.attempt) &&
+      hasValue(d?.max_repeat) &&
+      `تلاش ${toFaDigits(d.attempt)} از ${toFaDigits(d.max_repeat)}`
+  )
 }
 
 function formatAutocallAction(d) {
-  const body = d.body || d.body_text
-  const lines = []
-  if (hasValue(body)) lines.push(`متن تماس: ${body}`)
-  else if (hasValue(d.result)) lines.push(`نتیجه تماس: ${d.result}`)
+  const body = d?.body_text || d?.body
+  const lines = buildLines(
+    hasValue(body) && `متن تماس: ${body}`,
+    hasValue(d?.result) && `نتیجه تماس: ${d.result}`
+  )
   return lines.length ? lines : ['—']
 }
 
 function formatAutomatedRetryFailure(d) {
   const lines = buildLines(
+    hasValue(d?.body_text) && `متن: ${d.body_text}`,
     hasValue(d?.action_type) && `نوع اقدام: ${actionTypeLabel(d.action_type)}`,
     hasValue(d?.result) && `نتیجه: ${d.result}`,
     hasValue(d?.attempt) &&
@@ -232,8 +240,71 @@ function formatPaymentPartial(d) {
   return buildLines(
     hasValue(d.amount) && `مبلغ پرداختی: ${rial(d.amount)}`,
     hasValue(d.previous_claims) && `مطالبات قبلی: ${rial(d.previous_claims)}`,
-    hasValue(d.new_claims) && `مطالبات جدید: ${rial(d.new_claims)}`
+    hasValue(d.new_claims) && `مطالبات جدید: ${rial(d.new_claims)}`,
+    hasValue(d.transaction_id) && `شناسه تراکنش: ${toFaDigits(d.transaction_id)}`,
+    hasValue(d.description) && `توضیحات: ${d.description}`
   )
+}
+
+function formatPartialBeforePromise(d) {
+  return buildLines(
+    hasValue(d.amount) && `مبلغ پرداختی: ${rial(d.amount)}`,
+    hasValue(d.previous_claims) && `مطالبات قبلی: ${rial(d.previous_claims)}`,
+    hasValue(d.new_claims) && `مطالبات جدید: ${rial(d.new_claims)}`,
+    hasValue(d.transaction_id) && `شناسه تراکنش: ${toFaDigits(d.transaction_id)}`,
+    hasValue(d.description) && `توضیحات: ${d.description}`,
+    hasValue(d.promise_datetime) && `تاریخ تعهد: ${formatJalaliDateTime(d.promise_datetime)}`,
+    hasValue(d.promise_amount) && `مبلغ تعهد: ${rial(d.promise_amount)}`,
+    hasValue(d.previous_next_action) && `اقدام بعدی قبلی: ${d.previous_next_action}`,
+    hasValue(d.previous_next_action_date) &&
+      `تاریخ اقدام بعدی قبلی: ${formatJalaliDateTime(d.previous_next_action_date)}`,
+    hasValue(d.gap_days) && `فاصله تا اقدام بعدی: ${toFaDigits(d.gap_days)} روز`
+  )
+}
+
+const DETAIL_FIELD_LABELS = {
+  amount: 'مبلغ پرداختی',
+  previous_claims: 'مطالبات قبلی',
+  new_claims: 'مطالبات جدید',
+  transaction_id: 'شناسه تراکنش',
+  description: 'توضیحات',
+  promise_datetime: 'تاریخ تعهد',
+  promise_amount: 'مبلغ تعهد',
+  previous_next_action: 'اقدام بعدی قبلی',
+  previous_next_action_date: 'تاریخ اقدام بعدی قبلی',
+  gap_days: 'فاصله تا اقدام بعدی (روز)',
+  previous_segment_id: 'سگمنت قبلی',
+  new_segment_id: 'سگمنت جدید',
+  previous_cei: 'CEI قبلی',
+  new_cei: 'CEI جدید',
+  note: 'توضیح',
+  strategy_id: 'شناسه استراتژی',
+  strategy_title: 'عنوان استراتژی',
+  segment_new_title: 'سگمنت جدید',
+}
+
+function formatGenericDetailValue(key, value) {
+  if (!hasValue(value)) return null
+  if (key === 'gap_days') return `${toFaDigits(value)} روز`
+  if (key.includes('amount') || key.includes('claims')) {
+    const formatted = rial(value)
+    return formatted ?? toFaDigits(value)
+  }
+  if (key.includes('datetime') || key.endsWith('_date')) {
+    return formatJalaliDateTime(value)
+  }
+  if (typeof value === 'boolean') return value ? 'بله' : 'خیر'
+  if (typeof value === 'number') return toFaDigits(value)
+  return String(value)
+}
+
+function formatGenericDetails(d) {
+  return Object.entries(d)
+    .filter(([k, v]) => k !== '_text' && hasValue(v))
+    .map(([k, v]) => {
+      const label = DETAIL_FIELD_LABELS[k] || k.replace(/_/g, ' ')
+      return `${label}: ${formatGenericDetailValue(k, v)}`
+    })
 }
 
 function formatBurnReason(d, text, operation) {
@@ -256,10 +327,11 @@ function formatBurnReason(d, text, operation) {
  * @returns {string[]}
  */
 export function formatHistoryDetailsLines(operation, raw, context = {}) {
+  const op = normalizeHistoryOperation(operation)
   const d = parseDetails(raw)
   const text = d?._text || (typeof raw === 'string' && !d ? raw : null)
 
-  switch (operation) {
+  switch (op) {
     case 'ایجاد پرونده':
       return text && !text.includes('پرونده') ? [text] : ['پرونده جدید ایجاد شد.']
 
@@ -321,12 +393,12 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
       return formatAutocallAction(d || {})
     }
 
-    case 'ارسال ناموفق پیامک — تلاش مجدد':
-    case 'تماس خودکار ناموفق — تلاش مجدد':
-    case 'ارسال پیامک هشدار — تلاش مجدد':
-    case 'ارسال پیامک تهدید — تلاش مجدد':
-    case 'تماس خودکار هشدار — تلاش مجدد':
-    case 'تماس خودکار تهدید — تلاش مجدد':
+    case 'ارسال ناموفق پیامک هشدار':
+    case 'ارسال ناموفق پیامک تهدید':
+    case 'تماس خودکار ناموفق هشدار':
+    case 'تماس خودکار ناموفق تهدید':
+    case 'ارسال ناموفق پیامک':
+    case 'تماس خودکار ناموفق':
       return formatAutomatedRetryFailure(d || {})
 
     case 'عبور به اقدام بعدی استراتژی':
@@ -363,6 +435,9 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
 
     case 'پرداخت جزئی بدهی':
       return formatPaymentPartial(d || {})
+
+    case 'پرداخت جزئی قبل از سررسید تعهد':
+      return formatPartialBeforePromise(d || {})
 
     case 'سوخت پرونده — فوت کاربر':
       return formatBurnReason(d || {}, text, operation)
@@ -418,9 +493,7 @@ export function formatHistoryDetailsLines(operation, raw, context = {}) {
     default:
       if (text) return [text]
       if (d && !d._text) {
-        const generic = Object.entries(d)
-          .filter(([k, v]) => k !== '_text' && hasValue(v))
-          .map(([k, v]) => `${k}: ${typeof v === 'number' && k.includes('amount') ? rial(v) : v}`)
+        const generic = formatGenericDetails(d)
         return generic.length ? generic : ['—']
       }
       return ['—']

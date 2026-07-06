@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { FileSpreadsheet, RefreshCw, ChevronRight, ChevronLeft } from 'lucide-react'
 import { fetchCases } from '../api/cases'
 import { fetchNegotiators } from '../api/negotiators'
-import { hasPermission } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 import { toFaDigits } from '../utils/format'
 import CasesFilters from '../components/table/CasesFilters'
 import CasesTable from '../components/table/CasesTable'
@@ -23,6 +23,7 @@ const emptyFilters = {
 }
 
 export default function Cases() {
+  const { hasPermission } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [rows, setRows] = useState([])

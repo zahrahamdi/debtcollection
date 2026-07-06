@@ -12,7 +12,7 @@ import {
   toEnDigits,
   toFaDigits,
 } from '../utils/format'
-import { caseStatusLabel, caseStatusTone, HISTORY_OPERATIONS } from '../utils/constants'
+import { caseStatusLabel, caseStatusTone, HISTORY_OPERATIONS, normalizeHistoryOperation } from '../utils/constants'
 import { formatCallOutcomeDetailLines, formatHistoryDetailsLines } from '../utils/historyDetails'
 
 const inputClass =
@@ -102,12 +102,14 @@ export default function History() {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-panel">
         <p className="text-sm text-slate-500">
-          پرونده‌ای انتخاب نشده است. از{' '}
-          <Link to="/cases" className="font-medium text-brand-600 hover:text-brand-700">
-            لیست پرونده‌ها
-          </Link>{' '}
-          یک پرونده را باز کرده و «مشاهده تاریخچه تغییرات» را انتخاب کنید.
+          لطفاً از طریق ساید بار پرونده وارد این صفحه شوید.
         </p>
+        <Link
+          to="/cases"
+          className="mt-6 inline-block rounded-xl bg-brand-600 px-6 py-2 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          بازگشت به پرونده‌ها
+        </Link>
       </div>
     )
   }
@@ -240,10 +242,11 @@ export default function History() {
               </tr>
             ) : (
               rows.map((row) => {
-                const detailLines = formatHistoryDetailsLines(row.operation, row.details, {
+                const op = normalizeHistoryOperation(row.operation)
+                const detailLines = formatHistoryDetailsLines(op, row.details, {
                   user_name: row.user_name,
                 })
-                const isCallOutcome = row.operation === 'ثبت خروجی تماس'
+                const isCallOutcome = op === 'ثبت خروجی تماس'
 
                 return (
                   <tr
@@ -253,7 +256,7 @@ export default function History() {
                     <td className={cell}>{orDash(row.credit_id)}</td>
                     <td className={cell}>{orDash(row.debtor_name)}</td>
                     <td className={cell}>{orDash(row.user_name || 'سیستم')}</td>
-                    <td className={cell}>{orDash(row.operation)}</td>
+                    <td className={cell}>{orDash(op)}</td>
                     <td className={cell}>
                       <span style={jalaliDateTimeStyle}>
                         {formatSqliteDateTime(row.created_at)}

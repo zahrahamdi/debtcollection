@@ -2,18 +2,15 @@ import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, Lock, CalendarX2, FileCheck2, Hourglass } from 'lucide-react'
 import { fetchSettings, updateSettings, fetchSettingsHistory } from '../../api/settings'
-import { toFaDigits } from '../../utils/format'
+import { toFaDigits, formatSqliteDateTime, jalaliDateTimeStyle } from '../../utils/format'
 import Modal from '../modal/Modal'
 
 const inputClass =
   'w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 function formatWhen(value) {
-  try {
-    return new Date(value.replace(' ', 'T') + 'Z').toLocaleString('fa-IR')
-  } catch {
-    return value
-  }
+  if (!value) return '—'
+  return <span style={jalaliDateTimeStyle}>{formatSqliteDateTime(value)}</span>
 }
 
 // شروط ثابت و غیرقابل ویرایش (شرط دوم و سوم — Story 11.1)

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { Upload, Download, RefreshCw } from 'lucide-react'
+import { format } from 'date-fns-jalali'
 import * as XLSX from 'xlsx'
 import {
   uploadCases,
@@ -11,7 +12,7 @@ import {
   fetchBulkHistory,
   errorReportUrl,
 } from '../api/bulk'
-import { isAdmin } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 import { formatSqliteDateTime, jalaliDateTimeStyle, toFaDigits } from '../utils/format'
 
 const STATUS_TONE = {
@@ -38,13 +39,36 @@ const UPLOAD_HANDLERS = {
 const columns = [
   'نام کاربر',
   'نام عملیات',
-  'تاریخ',
+  'تاریخ انجام',
   'تعداد رکوردها',
   'تعداد موفق',
   'تعداد ناموفق',
   'وضعیت',
   'دریافت گزارش',
 ]
+
+function toastBulkResult(result) {
+  const { status, success_count: ok, fail_count: fail, errors } = result
+  if (status === 'success') {
+    toast.success(
+      `${toFaDigits(String(ok))} ردیف با موفقیت پردازش شد. جزئیات را در تاریخچه ببینید.`
+    )
+    return
+  }
+  if (status === 'partial') {
+    toast(
+      `موفق: ${toFaDigits(String(ok))} · ناموفق: ${toFaDigits(String(fail))}. گزارش خطا را دانلود کنید.`,
+      { icon: '⚠️' }
+    )
+    return
+  }
+  const reason = errors?.[0]?.reason
+  toast.error(
+    reason
+      ? `پردازش ناموفق — ${reason}`
+      : `هیچ ردیفی پردازش نشد (${toFaDigits(String(fail || 0))} خطا)`
+  )
+}
 
 const cell = 'whitespace-nowrap px-4 py-3'
 const inputClass =
@@ -68,6 +92,101 @@ function countExcelRows(file) {
   })
 }
 
+const PAYMENT_TEMPLATE_HEADERS = [
+  'شناسه اعتبار',
+  'کد ملی',
+  'مبلغ پرداختی به ریال',
+  'تاریخ و ساعت پرداخت',
+  'شماره تراکنش',
+  'توضیحات',
+]
+
+const BULK_ASSIGN_HEADERS = ['شناسه اعتبار', 'نام مذاکره‌کننده']
+
+const BULK_REASSIGN_HEADERS = ['شناسه اعتبار', 'نام مذاکره‌کننده جدید']
+
+function downloadXlsxSample(filename, sheetName, headers, rows) {
+  const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  XLSX.writeFile(wb, filename)
+}
+
+function samplePaymentDatetime() {
+  const now = new Date()
+  const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  return `${format(now, 'yyyy/MM/dd')} ${hm}`
+}
+
+function downloadPaymentSample() {
+  const rows = [
+    {
+      'شناسه اعتبار': '127891611121',
+      'کد ملی': '0012345678',
+      'مبلغ پرداختی به ریال': 150000000,
+      'تاریخ و ساعت پرداخت': `${samplePaymentDatetime().split(' ')[0]} 14:30`,
+      'شماره تراکنش': 'TXN-SAMPLE-01',
+      'توضیحات': 'نمونه — کد ملی را با مقدار واقعی پرونده جایگزین کنید',
+    },
+    {
+      'شناسه اعتبار': '127891611121',
+      'کد ملی': '0012345678',
+      'مبلغ پرداختی به ریال': 50000000,
+      'تاریخ و ساعت پرداخت': `${samplePaymentDatetime().split(' ')[0]} 09:15`,
+      'شماره تراکنش': 'TXN-SAMPLE-02',
+      'توضیحات': 'نمونه پرداخت جزئی',
+    },
+  ]
+  downloadXlsxSample('payments-import-sample.xlsx', 'payments', PAYMENT_TEMPLATE_HEADERS, rows)
+}
+
+function downloadBulkAssignSample() {
+  downloadXlsxSample('bulk-assign-sample.xlsx', 'assign', BULK_ASSIGN_HEADERS, [
+    {
+      'شناسه اعتبار': '127891611135',
+      'نام مذاکره‌کننده': 'زهرا حمیدی',
+    },
+    {
+      'شناسه اعتبار': '127891611136',
+      'نام مذاکره‌کننده': 'علی رضایی',
+    },
+  ])
+}
+
+function downloadBulkReassignSample() {
+  downloadXlsxSample('bulk-reassign-sample.xlsx', 'reassign', BULK_REASSIGN_HEADERS, [
+    {
+      'شناسه اعتبار': '127891611133',
+      'نام مذاکره‌کننده جدید': 'زهرا حمیدی',
+    },
+    {
+      'شناسه اعتبار': '127891611134',
+      'نام مذاکره‌کننده جدید': 'علی رضایی',
+    },
+  ])
+}
+
+const SAMPLE_DOWNLOADS = {
+  upload_payments: downloadPaymentSample,
+  bulk_assign: downloadBulkAssignSample,
+  bulk_reassign: downloadBulkReassignSample,
+}
+
+const SAMPLE_HINTS = {
+  upload_payments: {
+    title: 'ستون «تاریخ و ساعت پرداخت»',
+    body: 'YYYY/MM/DD HH:mm — مثال: 1404/04/15 14:30',
+  },
+  bulk_assign: {
+    title: 'فیلدهای اجباری',
+    body: 'شناسه اعتبار + نام مذاکره‌کننده (دقیقاً مطابق نام ثبت‌شده در سیستم). پرونده باید در وضعیت «در انتظار تخصیص به مذاکره‌کننده» باشد.',
+  },
+  bulk_reassign: {
+    title: 'فیلدهای اجباری',
+    body: 'شناسه اعتبار + نام مذاکره‌کننده جدید. پرونده باید از قبل مذاکره‌کننده داشته باشد؛ نام جدید نباید با مذاکره‌کننده فعلی یکسان باشد.',
+  },
+}
+
 function BulkOperationsSidebar({
   operationType,
   onOperationChange,
@@ -83,6 +202,9 @@ function BulkOperationsSidebar({
   onFileChange,
   onClear,
   onUpload,
+  onDownloadSample,
+  sampleHint,
+  showSampleDownload,
 }) {
   return (
     <aside className="w-full shrink-0 lg:sticky lg:top-4 lg:w-1/4 lg:self-start">
@@ -107,6 +229,20 @@ function BulkOperationsSidebar({
 
         {selectedOp && (
           <div className="space-y-4">
+            {showSampleDownload && sampleHint && (
+              <div className="rounded-xl border border-brand-100 bg-brand-50/40 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
+                <p className="font-medium text-slate-700">{sampleHint.title}</p>
+                <p className="mt-1">{sampleHint.body}</p>
+                <button
+                  type="button"
+                  onClick={onDownloadSample}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-white px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  دانلود فایل نمونه
+                </button>
+              </div>
+            )}
             <div
               onDragOver={onDragOver}
               onDragLeave={onDragLeave}
@@ -177,6 +313,7 @@ function BulkOperationsSidebar({
 }
 
 export default function BulkOperations() {
+  const { isAdmin } = useAuth()
   const fileRef = useRef(null)
   const [operationType, setOperationType] = useState('')
   const [selectedFile, setSelectedFile] = useState(null)
@@ -261,8 +398,8 @@ export default function BulkOperations() {
 
     setUploading(true)
     try {
-      await uploadFn(selectedFile)
-      toast.success('عملیات شما با موفقیت ثبت شد. نتیجه را در تاریخچه مشاهده کنید.')
+      const result = await uploadFn(selectedFile)
+      toastBulkResult(result)
       loadHistory()
       resetFileState()
     } catch (err) {
@@ -299,6 +436,9 @@ export default function BulkOperations() {
           onFileChange={onFileChange}
           onClear={onClear}
           onUpload={handleUpload}
+          onDownloadSample={() => SAMPLE_DOWNLOADS[operationType]?.()}
+          sampleHint={SAMPLE_HINTS[operationType]}
+          showSampleDownload={Boolean(SAMPLE_DOWNLOADS[operationType])}
         />
 
         {/* بخش چپ — تاریخچه (حدود ۷۵٪ عرض) */}
@@ -346,7 +486,7 @@ export default function BulkOperations() {
                       <td className={cell}>{row.operation_label}</td>
                       <td className={cell}>
                         <span style={jalaliDateTimeStyle}>
-                          {formatSqliteDateTime(row.created_at)}
+                          {formatSqliteDateTime(row.performed_at || row.completed_at || row.created_at)}
                         </span>
                       </td>
                       <td className={cell}>{toFaDigits(String(row.total_count))}</td>

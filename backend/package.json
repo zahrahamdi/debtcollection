@@ -8,8 +8,11 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/db/seed.js",
     "delete-debtor": "node scripts/delete-debtor-by-mobile.js",
+    "delete-case": "node scripts/delete-case-by-credit-id.js",
     "seed-zahra": "node scripts/seed-zahra-hamdi-cases.js",
     "clear-ab-tests": "node scripts/clear-ab-tests.js",
+    "clear-all-cases": "node scripts/clear-all-cases.js",
+    "reset-cases-light-loan-2": "node scripts/reset-all-cases-and-remove-light-loan-2.js",
     "add-payment-test": "node scripts/add-payment-test-cases.js",
     "delete-all-except": "node scripts/delete-all-except-mobile.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -20,6 +23,7 @@
   "type": "commonjs",
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

@@ -40,6 +40,7 @@ function deleteDebtorsByIds(debtorIds) {
 
   if (caseIds.length > 0) {
     const cph = caseIds.map(() => '?').join(',');
+    counts.case_events = del(`DELETE FROM case_events WHERE case_id IN (${cph})`, caseIds);
     counts.case_history = del(`DELETE FROM case_history WHERE case_id IN (${cph})`, caseIds);
     counts.case_actions = del(`DELETE FROM case_actions WHERE case_id IN (${cph})`, caseIds);
     counts.promises = del(`DELETE FROM promises WHERE case_id IN (${cph})`, caseIds);
@@ -67,6 +68,16 @@ function deleteDebtorByMobile(mobile) {
   }
   const result = deleteDebtorsByIds(matched.map((d) => d.id));
   return { found: true, matched, ...result };
+}
+
+/** حذف همه بدهکاران و پرونده‌ها */
+function deleteAllCasesAndDebtors() {
+  const allDebtors = query('SELECT id FROM debtors');
+  const debtorIds = allDebtors.map((d) => d.id);
+  if (!debtorIds.length) {
+    return { deleted: { cases: 0, debtors: 0 }, debtors: [], cases: [] };
+  }
+  return deleteDebtorsByIds(debtorIds);
 }
 
 /** حذف همه بدهکاران و پرونده‌ها به‌جز بدهکار با شماره موبایل مشخص */
@@ -98,4 +109,9 @@ function deleteAllExceptMobile(mobile) {
   };
 }
 
-module.exports = { deleteDebtorByMobile, deleteAllExceptMobile, findDebtorsByMobile };
+module.exports = {
+  deleteDebtorByMobile,
+  deleteAllExceptMobile,
+  deleteAllCasesAndDebtors,
+  findDebtorsByMobile,
+};

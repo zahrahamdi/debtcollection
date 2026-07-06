@@ -4,11 +4,12 @@
  * ورود پرداخت‌ها از Excel
  */
 
-const { query, run } = require('../db/database');
+const XLSX = require('xlsx');
+const { query, run, transaction } = require('../db/database');
+const { insertCaseEvent, insertHistoryEvent } = require('../db/caseEvents');
 const { computeCei, applyCeiBoost } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
 const {
-  daysDiffFromToday,
   jalaliDateToDatetime,
   formatDatetime,
   calcActionStatus,
@@ -18,6 +19,10 @@ const {
   isWithinAllowedWindow,
   isActionDue,
   isJalaliPromisedOverdue,
+  normalizePaymentDatetime,
+  paymentDatetimeToIso,
+  isPaymentDatetimeInFuture,
+  dateToJalaliDateTime,
 } = require('../db/dateUtil');
 
 const MAX_ROWS = 1000;
@@ -30,6 +35,8 @@ const HEADER_TO_FIELD = {
   'مبلغ پرداختی به ریال': 'amount',
   'مبلغ پرداختی': 'amount',
   'تاریخ پرداخت': 'payment_date',
+  'تاریخ و ساعت پرداخت': 'payment_date',
+  'تاریخ و ساعت تراکنش': 'payment_date',
   'شماره تراکنش': 'transaction_id',
   'توضیحات': 'description',
 };
@@ -38,7 +45,7 @@ const REQUIRED_LABELS = {
   credit_id: 'شناسه اعتبار',
   national_code: 'کد ملی',
   amount: 'مبلغ پرداختی به ریال',
-  payment_date: 'تاریخ پرداخت',
+  payment_date: 'تاریخ و ساعت پرداخت',
 };
 
 const ACTION_LABELS = {
@@ -51,6 +58,13 @@ const ACTION_LABELS = {
 
 const SMS_OR_AUTOCALL = ['warning_sms', 'threatening_sms', 'warning_autocall', 'threatening_autocall'];
 
+function toEnDigits(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+
 function normalizeHeader(h) {
   return String(h ?? '')
     .trim()
@@ -61,16 +75,46 @@ function normalizeHeader(h) {
 }
 
 function normalizeNationalCode(value) {
-  return String(value ?? '')
-    .trim()
-    .replace(/\D/g, '');
+  return toEnDigits(value).trim().replace(/\D/g, '');
+}
+
+function coercePaymentDateValue(val) {
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return dateToJalaliDateTime(val);
+  }
+  if (typeof val === 'number' && val > 0) {
+    const dc = XLSX.SSF.parse_date_code(val);
+    if (dc) {
+      const dt = new Date(dc.y, dc.m - 1, dc.d, dc.H, dc.M, Math.floor(dc.S || 0));
+      return dateToJalaliDateTime(dt);
+    }
+  }
+  return val;
+}
+
+function isBlankPaymentRow(mapped, headerMap) {
+  const fields = new Set(Object.values(headerMap));
+  for (const field of fields) {
+    const v = mapped[field];
+    if (v !== null && v !== undefined && String(v).trim() !== '') return false;
+  }
+  return true;
+}
+
+function parseCreditId(val, label) {
+  if (val === null || val === undefined || val === '') {
+    return { ok: false, error: `فیلد ${label} خالی است` };
+  }
+  const s = toEnDigits(String(val)).trim();
+  if (!s) return { ok: false, error: `فیلد ${label} خالی است` };
+  return { ok: true, value: s };
 }
 
 function parseNumber(val, label) {
   if (val === null || val === undefined || val === '') {
     return { ok: false, error: `فیلد ${label} خالی است` };
   }
-  const cleaned = String(val).replace(/[,،\s]/g, '');
+  const cleaned = toEnDigits(val).replace(/[,،\s]/g, '');
   const n = Number(cleaned);
   if (Number.isNaN(n) || n < 0) {
     return { ok: false, error: `فرمت فیلد ${label} اشتباه است` };
@@ -79,7 +123,7 @@ function parseNumber(val, label) {
 }
 
 function parseString(val, label) {
-  const s = val === null || val === undefined ? '' : String(val).trim();
+  const s = val === null || val === undefined ? '' : toEnDigits(val).trim();
   if (!s) return { ok: false, error: `فیلد ${label} خالی است` };
   return { ok: true, value: s };
 }
@@ -128,21 +172,62 @@ function getCaseWithDebtor(creditId) {
 }
 
 function paymentDatetimeFromJalali(jalaliStr) {
-  const base = jalaliDateToDatetime(jalaliStr);
-  if (!base) return nowDatetime();
-  const parsed = parseActionDatetime(base);
-  const now = new Date();
-  return formatDatetime(
-    new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), now.getHours(), now.getMinutes(), now.getSeconds())
-  );
+  const normalized = normalizePaymentDatetime(jalaliStr);
+  if (!normalized) return nowDatetime();
+  return paymentDatetimeToIso(normalized) || nowDatetime();
 }
 
 function addDaysToJalaliDatetime(jalaliStr, days) {
-  const base = jalaliDateToDatetime(jalaliStr);
+  const normalized = normalizePaymentDatetime(jalaliStr);
+  if (normalized) {
+    const iso = paymentDatetimeToIso(normalized);
+    const dt = iso ? parseActionDatetime(iso) : null;
+    if (dt) {
+      dt.setDate(dt.getDate() + Number(days || 0));
+      return formatDatetime(dt);
+    }
+  }
+
+  const dateOnly = String(jalaliStr ?? '')
+    .trim()
+    .split(/\s+/)[0];
+  const base = jalaliDateToDatetime(dateOnly);
   if (!base) return null;
   const d = parseActionDatetime(base);
+  if (!d) return null;
   d.setDate(d.getDate() + Number(days || 0));
   return formatDatetime(d);
+}
+
+const NEGOTIATOR_CALL_LABEL = 'تماس مذاکره‌کننده';
+
+function isInNegotiatorPhase(caseRow) {
+  if (!caseRow.assigned_negotiator_id) return false;
+  return ['in_negotiation', 'pending_negotiator_recall', 'pending_negotiator_call'].includes(
+    caseRow.case_status
+  );
+}
+
+function resolvePartialPaymentNextAction(caseRow) {
+  if (isInNegotiatorPhase(caseRow)) return NEGOTIATOR_CALL_LABEL;
+  return PARTIAL_RESUME_ACTION;
+}
+
+function partialPaymentGapDays() {
+  return parseInt(getSetting('partial_payment_gap_days', '10'), 10);
+}
+
+function computePartialPaymentSchedule(caseRow, paymentDate) {
+  const gapDays = partialPaymentGapDays();
+  const nextActionDate = addDaysToJalaliDatetime(paymentDate, gapDays);
+  if (!nextActionDate) {
+    throw new Error('محاسبه تاریخ اقدام بعدی پس از پرداخت جزئی ناموفق بود');
+  }
+  return {
+    gapDays,
+    nextAction: resolvePartialPaymentNextAction(caseRow),
+    nextActionDate,
+  };
 }
 
 function formatRial(amount) {
@@ -154,40 +239,36 @@ function buildPaymentResultText(amount, prevClaims, newClaims) {
 }
 
 function insertCaseHistory(caseId, debtorId, userName, operation, caseRow, details) {
-  run(
-    `INSERT INTO case_history (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-     VALUES ($cid, $did, $user, $op, $st, $na, $nad, $det)`,
-    {
-      $cid: caseId,
-      $did: debtorId,
-      $user: userName || 'سیستم',
-      $op: operation,
-      $st: caseRow.case_status,
-      $na: caseRow.next_action,
-      $nad: caseRow.next_action_date,
-      $det: typeof details === 'string' ? details : JSON.stringify(details),
-    }
-  );
+  insertHistoryEvent({
+    case_id: caseId,
+    operation,
+    user_name: userName || 'سیستم',
+    case_status: caseRow.case_status,
+    next_action: caseRow.next_action,
+    next_action_date: caseRow.next_action_date,
+    details: typeof details === 'string' ? details : JSON.stringify(details),
+  });
 }
 
-function insertPaymentAction(caseId, actionType, resultText, actionDatetime, cost = 0) {
-  const maxSeq = query(
-    'SELECT COALESCE(MAX(seq), 0) AS m FROM case_actions WHERE case_id = $id',
-    { $id: caseId }
-  )[0].m;
-
-  run(
-    `INSERT INTO case_actions (case_id, seq, action_type, body_text, result, action_date, cost)
-     VALUES ($cid, $seq, $type, NULL, $res, $date, $cost)`,
-    {
-      $cid: caseId,
-      $seq: maxSeq + 1,
-      $type: actionType,
-      $res: resultText,
-      $date: actionDatetime,
-      $cost: cost,
-    }
+function logPaymentHistory(caseId, userName, operation, actionType, caseRow, historyDetails, actionDatetime) {
+  const summary = buildPaymentResultText(
+    historyDetails.amount,
+    historyDetails.previous_claims,
+    historyDetails.new_claims
   );
+  insertCaseEvent({
+    case_id: caseId,
+    event_type: 'payment',
+    action_type: actionType,
+    label: operation,
+    user_name: userName || 'سیستم',
+    case_status: caseRow.case_status ?? null,
+    next_action: caseRow.next_action ?? null,
+    next_action_date: caseRow.next_action_date ?? null,
+    result: summary,
+    details: JSON.stringify(historyDetails),
+    created_at: actionDatetime,
+  });
 }
 
 function recalculateCei(caseRow, newClaims) {
@@ -205,8 +286,9 @@ function recalculateCei(caseRow, newClaims) {
 
 function getPerformedActionTypes(caseId) {
   const rows = query(
-    `SELECT DISTINCT action_type FROM case_actions
-     WHERE case_id = $id AND action_type NOT IN ('payment_full', 'payment_partial')`,
+    `SELECT DISTINCT action_type FROM case_events
+     WHERE case_id = $id AND event_type = 'action'
+       AND action_type NOT IN ('payment_full', 'payment_partial')`,
     { $id: caseId }
   );
   return new Set(rows.map((r) => r.action_type));
@@ -355,13 +437,17 @@ function resumePartialPaymentCase(caseRow, meta) {
     resultSnapshot = assignStrategyFromStart(caseRow.id, meta.new_segment_id, caseRow.credit_type, snapshot);
     insertCaseHistory(caseRow.id, caseRow.debtor_id, 'سیستم', 'تغییر استراتژی پس از پرداخت جزئی', resultSnapshot, {
       note: 'سگمنت سبک‌تر شد — استراتژی جدید از ابتدا',
+      segment_new_id: meta.new_segment_id,
       segment_new_title: newSeg?.title,
+      strategy_id: resultSnapshot.strategy_id ?? null,
     });
   } else {
     resultSnapshot = assignStrategyFromStart(caseRow.id, meta.new_segment_id, caseRow.credit_type, snapshot);
     insertCaseHistory(caseRow.id, caseRow.debtor_id, 'سیستم', 'تغییر استراتژی پس از پرداخت جزئی', resultSnapshot, {
       note: 'سگمنت تغییر کرد — استراتژی جدید از ابتدا',
+      segment_new_id: meta.new_segment_id,
       segment_new_title: newSeg?.title,
+      strategy_id: resultSnapshot.strategy_id ?? null,
     });
   }
 
@@ -369,12 +455,12 @@ function resumePartialPaymentCase(caseRow, meta) {
 }
 
 function processPendingPromisesOnPayment(caseRow, paymentAmount, userName, caseSnapshot) {
-  const pending = query(
-    `SELECT * FROM promises WHERE case_id = $id AND status = 'pending' ORDER BY id ASC`,
+  const openPromises = query(
+    `SELECT * FROM promises WHERE case_id = $id AND status IN ('pending', 'broken') ORDER BY id ASC`,
     { $id: caseRow.id }
   );
 
-  for (const p of pending) {
+  for (const p of openPromises) {
     if (paymentAmount < Number(p.amount)) continue;
 
     run(`UPDATE promises SET status = 'fulfilled' WHERE id = $pid`, { $pid: p.id });
@@ -385,15 +471,18 @@ function processPendingPromisesOnPayment(caseRow, paymentAmount, userName, caseS
 
 function processFullPayment(caseRow, amount, paymentDate, userName, extras = {}) {
   const prevClaims = Number(caseRow.claims_amount) || 0;
+  const prevPenalty = Number(caseRow.penalty_amount) || 0;
+  const prevOutstanding = Number(caseRow.outstanding_debt) || 0;
+  const newOutstanding = Math.max(0, prevOutstanding - prevClaims);
   const actionDatetime = paymentDatetimeFromJalali(paymentDate);
-  const resultText = buildPaymentResultText(amount, prevClaims, 0);
 
   run(
-    `UPDATE cases SET claims_amount = 0, outstanding_debt = 0, case_status = 'paid',
-     next_action = NULL, next_action_date = NULL, action_status = 'waiting',
-     strategy_id = NULL, last_payment_date = $lpd, last_payment_amount = $lpa,
+    `UPDATE cases SET claims_amount = 0, penalty_amount = 0, outstanding_debt = $out,
+     case_status = 'paid', next_action = NULL, next_action_date = NULL, action_status = 'waiting',
+     last_payment_date = $lpd, last_payment_amount = $lpa,
      updated_at = datetime('now') WHERE id = $id`,
     {
+      $out: newOutstanding,
       $lpd: paymentDate,
       $lpa: amount,
       $id: caseRow.id,
@@ -405,8 +494,6 @@ function processFullPayment(caseRow, amount, paymentDate, userName, extras = {})
     { $cid: caseRow.id, $amt: amount, $pd: paymentDate }
   );
 
-  insertPaymentAction(caseRow.id, 'payment_full', resultText, actionDatetime);
-
   const updated = {
     case_status: 'paid',
     next_action: null,
@@ -417,11 +504,15 @@ function processFullPayment(caseRow, amount, paymentDate, userName, extras = {})
     amount,
     previous_claims: prevClaims,
     new_claims: 0,
+    previous_penalty: prevPenalty,
+    new_penalty: 0,
+    previous_outstanding: prevOutstanding,
+    new_outstanding: newOutstanding,
     transaction_id: extras.transaction_id || null,
     description: extras.description || null,
   };
 
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, userName, 'پرداخت کامل بدهی', updated, historyDetails);
+  logPaymentHistory(caseRow.id, userName, 'پرداخت کامل بدهی', 'payment_full', updated, historyDetails, actionDatetime);
   processPendingPromisesOnPayment(caseRow, amount, userName, updated);
   return { payment_type: 'full', previous_claims: prevClaims, new_claims: 0 };
 }
@@ -446,8 +537,7 @@ function processPartialPaymentBeforePromiseDue(caseRow, amount, paymentDate, use
     throw new Error('سگمنتی متناسب با CEI جدید یافت نشد');
   }
 
-  const gapDays = parseInt(getSetting('partial_payment_gap_days', '10'), 10);
-  const nextActionDate = addDaysToJalaliDatetime(paymentDate, gapDays);
+  const { gapDays, nextAction, nextActionDate } = computePartialPaymentSchedule(caseRow, paymentDate);
   const actionDatetime = paymentDatetimeFromJalali(paymentDate);
   const resultText = buildPaymentResultText(amount, prevClaims, newClaims);
   const newOutstanding = Math.max(0, (Number(caseRow.outstanding_debt) || 0) - amount);
@@ -466,7 +556,7 @@ function processPartialPaymentBeforePromiseDue(caseRow, amount, paymentDate, use
       $seg: newSegment.id,
       $lpd: paymentDate,
       $lpa: amount,
-      $na: previousNextAction,
+      $na: nextAction,
       $nad: nextActionDate,
       $as: calcActionStatus(nextActionDate),
       $id: caseRow.id,
@@ -478,11 +568,9 @@ function processPartialPaymentBeforePromiseDue(caseRow, amount, paymentDate, use
     { $cid: caseRow.id, $amt: amount, $pd: paymentDate }
   );
 
-  insertPaymentAction(caseRow.id, 'payment_partial', resultText, actionDatetime);
-
   const updated = {
     case_status: caseRow.case_status,
-    next_action: previousNextAction,
+    next_action: nextAction,
     next_action_date: nextActionDate,
   };
 
@@ -499,13 +587,14 @@ function processPartialPaymentBeforePromiseDue(caseRow, amount, paymentDate, use
     gap_days: gapDays,
   };
 
-  insertCaseHistory(
+  logPaymentHistory(
     caseRow.id,
-    caseRow.debtor_id,
     userName,
     PARTIAL_BEFORE_PROMISE_OP,
+    'payment_partial',
     updated,
-    historyDetails
+    historyDetails,
+    actionDatetime
   );
 
   return {
@@ -546,8 +635,8 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
     throw new Error('سگمنتی متناسب با CEI جدید یافت نشد');
   }
 
-  const gapDays = parseInt(getSetting('partial_payment_gap_days', '10'), 10);
-  const nextActionDate = addDaysToJalaliDatetime(paymentDate, gapDays);
+  const { gapDays, nextAction, nextActionDate } = computePartialPaymentSchedule(caseRow, paymentDate);
+  const inNegotiatorPhase = isInNegotiatorPhase(caseRow);
   const actionDatetime = paymentDatetimeFromJalali(paymentDate);
   const resultText = buildPaymentResultText(amount, prevClaims, newClaims);
 
@@ -567,7 +656,7 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
       $seg: newSegment.id,
       $lpd: paymentDate,
       $lpa: amount,
-      $na: PARTIAL_RESUME_ACTION,
+      $na: nextAction,
       $nad: nextActionDate,
       $as: calcActionStatus(nextActionDate),
       $id: caseRow.id,
@@ -579,11 +668,9 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
     { $cid: caseRow.id, $amt: amount, $pd: paymentDate }
   );
 
-  insertPaymentAction(caseRow.id, 'payment_partial', resultText, actionDatetime);
-
   const updated = {
     case_status: caseRow.case_status,
-    next_action: PARTIAL_RESUME_ACTION,
+    next_action: nextAction,
     next_action_date: nextActionDate,
   };
 
@@ -604,10 +691,18 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
     ...resumeMeta,
   };
 
-  insertCaseHistory(caseRow.id, caseRow.debtor_id, userName, 'پرداخت جزئی بدهی', updated, historyDetails);
+  logPaymentHistory(
+    caseRow.id,
+    userName,
+    'پرداخت جزئی بدهی',
+    'payment_partial',
+    updated,
+    historyDetails,
+    actionDatetime
+  );
   processPendingPromisesOnPayment(caseRow, amount, userName, updated);
 
-  if (isActionDue(nextActionDate)) {
+  if (!inNegotiatorPhase && isActionDue(nextActionDate)) {
     const refreshed = query('SELECT * FROM cases WHERE id = $id', { $id: caseRow.id })[0];
     resumePartialPaymentCase(refreshed, resumeMeta);
   }
@@ -617,25 +712,33 @@ function processPartialPayment(caseRow, amount, paymentDate, userName, extras = 
 
 function validatePaymentRow(mapped) {
   const errors = [];
-  const creditId = parseString(mapped.credit_id, REQUIRED_LABELS.credit_id);
-  const nationalCode = parseString(mapped.national_code, REQUIRED_LABELS.national_code);
+  const creditId = parseCreditId(mapped.credit_id, REQUIRED_LABELS.credit_id);
+  const nationalCodeRaw = parseString(mapped.national_code, REQUIRED_LABELS.national_code);
   const amount = parseNumber(mapped.amount, REQUIRED_LABELS.amount);
-  const paymentDate = parseString(mapped.payment_date, REQUIRED_LABELS.payment_date);
+  const paymentDate = parseString(
+    coercePaymentDateValue(mapped.payment_date),
+    REQUIRED_LABELS.payment_date
+  );
 
   if (!creditId.ok) errors.push(creditId.error);
-  if (!nationalCode.ok) errors.push(nationalCode.error);
+  if (!nationalCodeRaw.ok) errors.push(nationalCodeRaw.error);
   if (!amount.ok) errors.push(amount.error);
   if (!paymentDate.ok) errors.push(paymentDate.error);
+
+  const nationalCode = nationalCodeRaw.ok ? normalizeNationalCode(nationalCodeRaw.value) : '';
+  if (nationalCodeRaw.ok && nationalCode.length !== 10) {
+    errors.push('کد ملی باید ۱۰ رقم باشد');
+  }
 
   if (errors.length) {
     return { ok: false, errors, credit_id: mapped.credit_id || '—' };
   }
 
-  const diff = daysDiffFromToday(paymentDate.value);
-  if (diff === null) {
-    errors.push('فرمت تاریخ پرداخت نامعتبر است (YYYY/MM/DD)');
-  } else if (diff > 0) {
-    errors.push('تاریخ پرداخت نمی‌تواند در آینده باشد');
+  const normalizedPaymentDate = normalizePaymentDatetime(paymentDate.value);
+  if (!normalizedPaymentDate) {
+    errors.push('فرمت تاریخ و ساعت پرداخت نامعتبر است (YYYY/MM/DD HH:mm)');
+  } else if (isPaymentDatetimeInFuture(paymentDate.value)) {
+    errors.push('تاریخ و ساعت پرداخت نمی‌تواند در آینده باشد');
   }
 
   if (amount.value <= 0) {
@@ -650,9 +753,9 @@ function validatePaymentRow(mapped) {
     ok: true,
     data: {
       credit_id: creditId.value,
-      national_code: nationalCode.value,
+      national_code: nationalCode,
       amount: amount.value,
-      payment_date: paymentDate.value,
+      payment_date: normalizedPaymentDate || paymentDate.value,
       transaction_id: mapped.transaction_id ? String(mapped.transaction_id).trim() : null,
       description: mapped.description ? String(mapped.description).trim() : null,
     },
@@ -715,7 +818,7 @@ function importPaymentsFromRows(rows, userName = 'ادمین') {
   }
 
   const result = {
-    total: rows.length,
+    total: 0,
     success_count: 0,
     fail_count: 0,
     full_count: 0,
@@ -736,6 +839,10 @@ function importPaymentsFromRows(rows, userName = 'ادمین') {
       mapped[field] = normalizedRaw[header];
     }
 
+    if (isBlankPaymentRow(mapped, headerMap)) return;
+
+    result.total += 1;
+
     const validation = validatePaymentRow(mapped);
     if (!validation.ok) {
       const reason = validation.errors.join('؛ ');
@@ -746,10 +853,12 @@ function importPaymentsFromRows(rows, userName = 'ادمین') {
     }
 
     try {
-      const outcome = processPaymentRow(validation.data, userName);
-      result.success_count += 1;
-      if (outcome.payment_type === 'full') result.full_count += 1;
-      else result.partial_count += 1;
+      transaction(() => {
+        const outcome = processPaymentRow(validation.data, userName);
+        result.success_count += 1;
+        if (outcome.payment_type === 'full') result.full_count += 1;
+        else result.partial_count += 1;
+      });
     } catch (err) {
       const reason = err.message || 'خطای نامشخص';
       result.errors.push({ row: rowNum, credit_id: validation.data.credit_id, reason });
@@ -776,8 +885,8 @@ function processDuePartialPaymentResumes() {
     if (!isActionDue(caseRow.next_action_date)) continue;
 
     const hist = query(
-      `SELECT details FROM case_history
-       WHERE case_id = $id AND operation = 'پرداخت جزئی بدهی'
+      `SELECT details FROM case_events
+       WHERE case_id = $id AND label = 'پرداخت جزئی بدهی'
        ORDER BY id DESC LIMIT 1`,
       { $id: caseRow.id }
     )[0];

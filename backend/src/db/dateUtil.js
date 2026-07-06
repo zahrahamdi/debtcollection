@@ -9,6 +9,13 @@ function pad2(n) {
   return String(n).padStart(2, '0');
 }
 
+function toEnDigits(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+
 function jalaliToGregorian(jy, jm, jd) {
   const jy1 = jy - 979;
   const jm1 = jm - 1;
@@ -84,9 +91,44 @@ function formatJalali(jy, jm, jd) {
   return `${jy}/${pad2(jm)}/${pad2(jd)}`;
 }
 
+const TEHRAN_TZ = 'Asia/Tehran';
+
+function tehranNowParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TEHRAN_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')),
+    minute: Number(get('minute')),
+    second: Number(get('second')),
+  };
+}
+
 function formatDatetime(date) {
-  const d = date instanceof Date ? date : new Date(date);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  if (date instanceof Date) {
+    const p = tehranNowParts(date);
+    return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}`;
+  }
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return String(date);
+  const p = tehranNowParts(d);
+  return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}`;
+}
+
+function parseTehranLocalIso(y, mo, d, h = 0, mi = 0, se = 0) {
+  const iso = `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(se)}+03:30`;
+  return new Date(iso);
 }
 
 function nowDatetime() {
@@ -98,54 +140,57 @@ function addMinutesFromNow(minutes) {
 }
 
 /** wait_minutes از الان + ساعت allowed_from روی همان روز (برای next_action_date استراتژی) */
+function tehranMinutesOfDay(date) {
+  const p = tehranNowParts(date instanceof Date ? date : new Date(date));
+  return p.hour * 60 + p.minute;
+}
+
+function setTehranTimeOnDate(date, allowedFrom) {
+  const p = tehranNowParts(date instanceof Date ? date : new Date(date));
+  const parts = String(allowedFrom || '09:00').split(':');
+  return parseTehranLocalIso(
+    p.year,
+    p.month,
+    p.day,
+    Number(parts[0]) || 9,
+    Number(parts[1]) || 0,
+    0
+  );
+}
+
+function addTehranDays(date, days) {
+  const p = tehranNowParts(date instanceof Date ? date : new Date(date));
+  const noon = parseTehranLocalIso(p.year, p.month, p.day, 12, 0, 0);
+  return new Date(noon.getTime() + Number(days) * 86400000);
+}
+
 function addMinutesWithAllowedFrom(minutes, allowedFrom) {
   const base = new Date(Date.now() + Number(minutes || 0) * 60000);
-  const parts = String(allowedFrom || '09:00').split(':');
-  base.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
-  return formatDatetime(base);
+  return formatDatetime(setTehranTimeOnDate(base, allowedFrom));
 }
 
-/** فردا ساعت شروع بازه مجاز (برای اولین اکشن خارج از بازه) */
 function nextAllowedStartDatetime(allowedFrom) {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  const parts = String(allowedFrom || '09:00').split(':');
-  d.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
-  return formatDatetime(d);
-}
-
-function setTimeFromHHMM(date, allowedFrom) {
-  const d = new Date(date);
-  const parts = String(allowedFrom || '09:00').split(':');
-  d.setHours(Number(parts[0]) || 9, Number(parts[1]) || 0, 0, 0);
-  return d;
+  return formatDatetime(setTehranTimeOnDate(addTehranDays(new Date(), 1), allowedFrom));
 }
 
 /**
- * هم‌تراز کردن datetime با بازه مجاز allowed_from..allowed_to:
- * - در بازه → همان لحظه
- * - قبل از allowed_from → همان روز ساعت allowed_from
- * - بعد از allowed_to → فردا ساعت allowed_from
+ * هم‌تراز کردن datetime با بازه مجاز allowed_from..allowed_to (وقت تهران)
  */
 function alignDatetimeToAllowedWindow(dt, allowedFrom, allowedTo) {
-  const d = dt instanceof Date ? new Date(dt.getTime()) : new Date(dt);
-  const mins = d.getHours() * 60 + d.getMinutes();
+  const d = dt instanceof Date ? dt : new Date(dt);
+  const mins = tehranMinutesOfDay(d);
   const from = parseHHMM(allowedFrom || '09:00');
   const to = parseHHMM(allowedTo || '18:00');
 
   if (from <= to) {
     if (mins >= from && mins <= to) return formatDatetime(d);
-    if (mins < from) return formatDatetime(setTimeFromHHMM(d, allowedFrom));
-    const next = new Date(d);
-    next.setDate(next.getDate() + 1);
-    return formatDatetime(setTimeFromHHMM(next, allowedFrom));
+    if (mins < from) return formatDatetime(setTehranTimeOnDate(d, allowedFrom));
+    return formatDatetime(setTehranTimeOnDate(addTehranDays(d, 1), allowedFrom));
   }
 
   if (mins >= from || mins <= to) return formatDatetime(d);
-  if (mins > to && mins < from) return formatDatetime(setTimeFromHHMM(d, allowedFrom));
-  const next = new Date(d);
-  next.setDate(next.getDate() + 1);
-  return formatDatetime(setTimeFromHHMM(next, allowedFrom));
+  if (mins > to && mins < from) return formatDatetime(setTehranTimeOnDate(d, allowedFrom));
+  return formatDatetime(setTehranTimeOnDate(addTehranDays(d, 1), allowedFrom));
 }
 
 /** next_action_date اولیه یا از «الان» بر اساس بازه مجاز اولین اکشن */
@@ -158,10 +203,9 @@ function computeNextActionDateFromWindow(allowedFrom, allowedTo, baseDate) {
   return alignDatetimeToAllowedWindow(base, allowedFrom, allowedTo);
 }
 
-function startOfLocalDay(date) {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
+function startOfTehranDay(date) {
+  const p = tehranNowParts(date instanceof Date ? date : new Date(date));
+  return parseTehranLocalIso(p.year, p.month, p.day, 0, 0, 0);
 }
 
 /**
@@ -175,7 +219,7 @@ function parseActionDatetime(value) {
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (iso) {
     const [, y, mo, d, h = '0', mi = '0', se = '0'] = iso;
-    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
+    return parseTehranLocalIso(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se));
   }
 
   if (s.includes('/')) {
@@ -184,7 +228,7 @@ function parseActionDatetime(value) {
       const [jy, jm, jd] = parts.map(Number);
       if (jy && jm && jd) {
         const { year, month, day } = jalaliToGregorian(jy, jm, jd);
-        return new Date(year, month - 1, day, 0, 0, 0);
+        return parseTehranLocalIso(year, month, day, 0, 0, 0);
       }
     }
   }
@@ -199,8 +243,8 @@ function parseJalali(jalaliStr) {
 }
 
 function localTodayParts() {
-  const n = new Date();
-  return { year: n.getFullYear(), month: n.getMonth() + 1, day: n.getDate() };
+  const p = tehranNowParts(new Date());
+  return { year: p.year, month: p.month, day: p.day };
 }
 
 function todayJalali() {
@@ -211,9 +255,14 @@ function todayJalali() {
 
 /** تاریخ و ساعت جلالی فعلی (local تهران) به فرمت YYYY/MM/DD HH:mm */
 function nowJalaliDateTime() {
-  const n = new Date();
-  const j = gregorianToJalali(n.getFullYear(), n.getMonth() + 1, n.getDate());
-  return `${formatJalali(j.year, j.month, j.day)} ${pad2(n.getHours())}:${pad2(n.getMinutes())}`;
+  return dateToJalaliDateTime(new Date());
+}
+
+/** تبدیل Date یا timestamp به رشته جلالی YYYY/MM/DD HH:mm (وقت تهران) */
+function dateToJalaliDateTime(date) {
+  const p = tehranNowParts(date instanceof Date ? date : new Date(date));
+  const j = gregorianToJalali(p.year, p.month, p.day);
+  return `${formatJalali(j.year, j.month, j.day)} ${pad2(p.hour)}:${pad2(p.minute)}`;
 }
 
 function todayUTC() {
@@ -228,8 +277,8 @@ function calcActionStatus(nextActionDate) {
   const now = new Date();
   if (now.getTime() < actionDt.getTime()) return 'waiting';
 
-  const actionDay = startOfLocalDay(actionDt);
-  const today = startOfLocalDay(now);
+  const actionDay = startOfTehranDay(actionDt);
+  const today = startOfTehranDay(now);
   if (actionDay.getTime() === today.getTime()) return 'due_today';
   return 'overdue';
 }
@@ -255,8 +304,8 @@ function parseHHMM(str) {
 }
 
 function currentMinutesOfDay() {
-  const n = new Date();
-  return n.getHours() * 60 + n.getMinutes();
+  const p = tehranNowParts(new Date());
+  return p.hour * 60 + p.minute;
 }
 
 function isWithinAllowedWindow(allowedFrom, allowedTo) {
@@ -296,10 +345,10 @@ function jalaliDateToDatetime(jalaliStr) {
   const [jy, jm, jd] = parts.map(Number);
   if (!jy || !jm || !jd) return null;
   const { year, month, day } = jalaliToGregorian(jy, jm, jd);
-  return formatDatetime(new Date(year, month - 1, day, 0, 0, 0));
+  return formatDatetime(parseTehranLocalIso(year, month, day, 0, 0, 0));
 }
 
-/** ترکیب تاریخ جلالی (YYYY/MM/DD) و ساعت (HH:mm) به datetime گرگوری local تهران */
+/** ترکیب تاریخ جلالی (YYYY/MM/DD) و ساعت (HH:mm) → datetime گرگوری با offset تهران */
 function jalaliDateTimeToDatetime(jalaliStr, timeStr) {
   if (!jalaliStr) return null;
   const parts = String(jalaliStr).trim().split('/');
@@ -310,7 +359,12 @@ function jalaliDateTimeToDatetime(jalaliStr, timeStr) {
   const t = String(timeStr || '00:00').split(':');
   const hh = Number(t[0]) || 0;
   const mm = Number(t[1]) || 0;
-  return formatDatetime(new Date(year, month - 1, day, hh, mm, 0));
+  return formatDatetime(parseTehranLocalIso(year, month, day, hh, mm, 0));
+}
+
+/** تاریخ گرگوری امروز (YYYY-MM-DD) — وقت تهران */
+function tehranTodayDateString() {
+  return nowDatetime().slice(0, 10);
 }
 
 /** آیا ساعت (HH:mm) در بازه مجاز [from, to] است؟ */
@@ -373,13 +427,43 @@ function promisedTimeFromDatetime(promisedDatetime) {
   return String(promisedDatetime).trim().split(/\s+/)[1] || null;
 }
 
+/** نرمال‌سازی تاریخ/ساعت پرداخت: YYYY/MM/DD HH:mm (بدون ساعت → 12:00) */
+function normalizePaymentDatetime(value) {
+  if (!value) return null;
+  const s = toEnDigits(value).trim();
+  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m;
+  if (h !== undefined) {
+    return `${y}/${pad2(mo)}/${pad2(d)} ${pad2(h)}:${pad2(mi)}`;
+  }
+  return `${y}/${pad2(mo)}/${pad2(d)} 12:00`;
+}
+
+function paymentDatetimeToIso(normalized) {
+  if (!normalized) return null;
+  const [datePart, timePart] = normalized.split(/\s+/);
+  return jalaliDateTimeToDatetime(datePart, timePart || '12:00');
+}
+
+function isPaymentDatetimeInFuture(value) {
+  const normalized = normalizePaymentDatetime(value);
+  if (!normalized) return null;
+  const iso = paymentDatetimeToIso(normalized);
+  const dt = parseActionDatetime(iso);
+  if (!dt) return null;
+  return Date.now() < dt.getTime();
+}
+
 module.exports = {
   parseJalali,
   parseActionDatetime,
   todayUTC,
   todayJalali,
   nowJalaliDateTime,
+  dateToJalaliDateTime,
   nowDatetime,
+  tehranTodayDateString,
   addMinutesFromNow,
   addMinutesWithAllowedFrom,
   nextAllowedStartDatetime,
@@ -400,6 +484,9 @@ module.exports = {
   normalizePromisedDatetime,
   promisedDateFromDatetime,
   promisedTimeFromDatetime,
+  normalizePaymentDatetime,
+  paymentDatetimeToIso,
+  isPaymentDatetimeInFuture,
   computeNextActionDate,
   computeNextActionDateFromWindow,
   alignDatetimeToAllowedWindow,

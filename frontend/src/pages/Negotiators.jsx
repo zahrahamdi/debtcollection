@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { Plus, Pencil } from 'lucide-react'
 import { fetchNegotiators, createNegotiator, updateNegotiator } from '../api/negotiators'
 import { fetchUsers } from '../api/users'
-import { isAdmin } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 import { toFaDigits, formatRial } from '../utils/format'
 import { cooperationTypeLabel, negotiatorStatusLabel } from '../utils/constants'
 import Badge from '../components/table/Badge'
@@ -31,6 +31,7 @@ const labelClass = 'mb-1 block text-xs font-medium text-slate-500'
 const emptyForm = { user_id: '', cooperation_type: 'internal', capacity: '', hourly_wage: '', status: 'active' }
 
 export default function Negotiators() {
+  const { isAdmin } = useAuth()
   const navigate = useNavigate()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)

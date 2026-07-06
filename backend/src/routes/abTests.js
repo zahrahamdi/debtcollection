@@ -3,6 +3,8 @@
 const express = require('express');
 const router = express.Router();
 const { query, run } = require('../db/database');
+const { nowDatetime } = require('../db/dateUtil');
+const { userDisplayName } = require('../services/auth.service');
 const { validateActions, replaceActions } = require('../db/strategyActions');
 
 const CREDIT_TYPES = ['loan', 'bnpl'];
@@ -28,10 +30,11 @@ function segmentStrategyCount(segmentId) {
 
 // ساخت یک استراتژی جدید به همراه اقدام‌هایش
 function createStrategyWithActions(title, creditType, segmentId, createdBy, actions) {
+  const now = nowDatetime();
   const { lastInsertRowid } = run(
-    `INSERT INTO strategies (title, credit_type, segment_id, created_by)
-     VALUES ($title, $t, $sid, $by)`,
-    { $title: title, $t: creditType, $sid: segmentId, $by: createdBy || 'ادمین' }
+    `INSERT INTO strategies (title, credit_type, segment_id, created_by, created_at, updated_at)
+     VALUES ($title, $t, $sid, $by, $now, $now)`,
+    { $title: title, $t: creditType, $sid: segmentId, $by: createdBy, $now: now }
   );
   replaceActions(lastInsertRowid, actions);
   return lastInsertRowid;
@@ -74,7 +77,7 @@ function resolveStrategySide(side, sideLabel, creditType, segmentId, createdBy) 
  * GET /api/ab-tests
  * لیست سناریوها با عنوان سگمنت و عنوان استراتژی‌ها.
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const rows = query(`
       SELECT
@@ -90,8 +93,7 @@ router.get('/', (req, res) => {
     `);
     res.json({ data: rows });
   } catch (err) {
-    console.error('[GET /api/ab-tests]', err);
-    res.status(500).json({ error: 'خطا در دریافت سناریوها' });
+    next(err);
   }
 });
 
@@ -99,10 +101,11 @@ router.get('/', (req, res) => {
  * POST /api/ab-tests
  * body: { name, credit_type, segment_id, strategy_a:{source,strategy_id?,title?,actions?}, ratio_a, strategy_b:{...}, ratio_b, created_by }
  */
-router.post('/', (req, res) => {
+router.post('/', (req, res, next) => {
   try {
-    const { name, credit_type, segment_id, strategy_a, strategy_b, ratio_a, ratio_b, created_by } =
+    const { name, credit_type, segment_id, strategy_a, strategy_b, ratio_a, ratio_b } =
       req.body || {};
+    const createdBy = userDisplayName(req.user);
 
     const cleanName = (name || '').trim();
     if (!cleanName) return res.status(400).json({ error: 'نام سناریو اجباری است' });
@@ -136,9 +139,9 @@ router.post('/', (req, res) => {
       return res.status(400).json({ error: 'مجموع نرخ توزیع دو استراتژی باید ۱۰۰٪ باشد' });
     }
 
-    const resolvedA = resolveStrategySide(strategy_a, 'استراتژی A', credit_type, segment_id, created_by);
+    const resolvedA = resolveStrategySide(strategy_a, 'استراتژی A', credit_type, segment_id, createdBy);
     if (resolvedA.error) return res.status(400).json({ error: resolvedA.error });
-    const resolvedB = resolveStrategySide(strategy_b, 'استراتژی B', credit_type, segment_id, created_by);
+    const resolvedB = resolveStrategySide(strategy_b, 'استراتژی B', credit_type, segment_id, createdBy);
     if (resolvedB.error) return res.status(400).json({ error: resolvedB.error });
 
     if (resolvedA.id === resolvedB.id) {
@@ -156,8 +159,7 @@ router.post('/', (req, res) => {
     const rows = query('SELECT * FROM ab_tests WHERE id = $id', { $id: lastInsertRowid });
     res.status(201).json({ data: rows[0] });
   } catch (err) {
-    console.error('[POST /api/ab-tests]', err);
-    res.status(500).json({ error: 'خطا در ایجاد سناریو' });
+    next(err);
   }
 });
 
@@ -165,7 +167,7 @@ router.post('/', (req, res) => {
  * DELETE /api/ab-tests/:id
  * حذف سناریو به همراه دو استراتژی آن.
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const rows = query('SELECT * FROM ab_tests WHERE id = $id', { $id: id });
@@ -186,8 +188,7 @@ router.delete('/:id', (req, res) => {
     run('DELETE FROM strategies WHERE id IN ($a, $b)', { $a: ab.strategy_a_id, $b: ab.strategy_b_id });
     res.json({ data: { id } });
   } catch (err) {
-    console.error('[DELETE /api/ab-tests/:id]', err);
-    res.status(500).json({ error: 'خطا در حذف سناریو' });
+    next(err);
   }
 });
 

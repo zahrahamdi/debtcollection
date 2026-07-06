@@ -32,31 +32,15 @@ export function formatNumber(value) {
 
 const TEHRAN_TZ = 'Asia/Tehran'
 
-function parseToDate(value, { assumeUtc = false } = {}) {
+function parseToDate(value) {
   const en = toEnDigits(String(value).trim())
 
   const isoMatch = en.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
   if (isoMatch) {
     const [, y, mo, d, h, mi, sec] = isoMatch
-    const date = assumeUtc
-      ? new Date(
-          Date.UTC(
-            Number(y),
-            Number(mo) - 1,
-            Number(d),
-            Number(h || 0),
-            Number(mi || 0),
-            Number(sec || 0)
-          )
-        )
-      : new Date(
-          Number(y),
-          Number(mo) - 1,
-          Number(d),
-          Number(h || 0),
-          Number(mi || 0),
-          Number(sec || 0)
-        )
+    const date = new Date(
+      `${y}-${mo}-${d}T${String(h || 0).padStart(2, '0')}:${mi || '00'}:${String(sec || 0).padStart(2, '0')}+03:30`
+    )
     if (!Number.isNaN(date.getTime())) return date
   }
 
@@ -115,19 +99,14 @@ function formatStoredJalaliDatetime(value) {
   return toFaDigits(date)
 }
 
-/** تاریخ و ساعت شمسی با تایم‌زون تهران — فرمت: ۱۴۰۴/۰۶/۰۱ - ۱۴:۳۰
- *  @param {{ assumeUtc?: boolean }} options — برای created_at دیتابیس (SQLite UTC)
- */
-export function formatJalaliDateTime(value, options = {}) {
-  const { assumeUtc = false } = options
+/** تاریخ و ساعت شمسی با تایم‌زون تهران — فرمت: ۱۴۰۴/۰۶/۰۱ - ۱۴:۳۰ */
+export function formatJalaliDateTime(value) {
   if (!value) return '—'
 
-  if (!assumeUtc) {
-    const stored = formatStoredJalaliDatetime(value)
-    if (stored) return stored
-  }
+  const stored = formatStoredJalaliDatetime(value)
+  if (stored) return stored
 
-  const date = parseToDate(value, { assumeUtc })
+  const date = parseToDate(value)
   if (!date) return toFaDigits(String(value))
 
   const { year, month, day, hour, minute } = tehranParts(date)
@@ -141,9 +120,20 @@ export function formatJalaliDateTime(value, options = {}) {
   return toFaDigits(jalaliDate)
 }
 
-/** زمان ثبت SQLite (datetime('now') — UTC) */
+/** زمان ثبت دیتابیس — ISO گرگوری به وقت تهران (همیشه تاریخ + ساعت) */
 export function formatSqliteDateTime(value) {
-  return formatJalaliDateTime(value, { assumeUtc: true })
+  if (!value) return '—'
+
+  const stored = formatStoredJalaliDatetime(value)
+  if (stored) return stored
+
+  const date = parseToDate(value)
+  if (!date) return toFaDigits(String(value))
+
+  const { year, month, day, hour, minute } = tehranParts(date)
+  const jalaliDate = formatJalaliFn(new Date(year, month - 1, day), 'yyyy/MM/dd')
+  const hm = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  return toFaDigits(`${jalaliDate} - ${hm}`)
 }
 
 /** تاریخ شمسی — alias برای formatJalaliDateTime */

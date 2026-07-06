@@ -5,7 +5,8 @@
  * منطق پردازش هر ردیف مشابه سینک Google Sheet است.
  */
 
-const { query, run } = require('../db/database');
+const { query, run, transaction } = require('../db/database');
+const { insertHistoryEvent } = require('../db/caseEvents');
 const { computeCei, applyCeiBoost } = require('../db/cei');
 const { toInterval } = require('../db/segmentUtil');
 const { nowDatetime, computeNextActionDateFromWindow, calcActionStatus, isActionDue } = require('../db/dateUtil');
@@ -441,20 +442,15 @@ function upsertDebtor(data) {
 }
 
 function insertCaseHistory(caseId, debtorId, userName, operation, caseRow, details) {
-  run(
-    `INSERT INTO case_history (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-     VALUES ($cid, $did, $user, $op, $st, $na, $nad, $det)`,
-    {
-      $cid: caseId,
-      $did: debtorId,
-      $user: userName || 'سیستم',
-      $op: operation,
-      $st: caseRow.case_status,
-      $na: caseRow.next_action,
-      $nad: caseRow.next_action_date,
-      $det: typeof details === 'string' ? details : JSON.stringify(details),
-    }
-  );
+  insertHistoryEvent({
+    case_id: caseId,
+    operation,
+    user_name: userName || 'سیستم',
+    case_status: caseRow.case_status,
+    next_action: caseRow.next_action,
+    next_action_date: caseRow.next_action_date,
+    details: typeof details === 'string' ? details : JSON.stringify(details),
+  });
 }
 
 function getCaseById(caseId) {
@@ -508,8 +504,8 @@ function getSegmentById(segmentId) {
 function getPerformedActionTypes(caseId) {
   const inList = STRATEGY_ACTION_TYPES.map((t) => `'${t}'`).join(', ');
   const rows = query(
-    `SELECT DISTINCT action_type FROM case_actions
-     WHERE case_id = $id AND action_type IN (${inList})`,
+    `SELECT DISTINCT action_type FROM case_events
+     WHERE case_id = $id AND event_type = 'action' AND action_type IN (${inList})`,
     { $id: caseId }
   );
   return new Set(rows.map((r) => r.action_type));
@@ -787,6 +783,26 @@ function stepChangeStrategyOnSegmentShift(caseId, newSegmentId, caseData, caseSn
   return { ok: true, strategy, startAction };
 }
 
+function isRespiteUntilDue(meta) {
+  const until = meta?.respite_until;
+  if (!until) return false;
+  return isActionDue(until);
+}
+
+function markDeferRespiteApplied(eventId, meta) {
+  run(`UPDATE case_events SET details = $d WHERE id = $id`, {
+    $d: JSON.stringify({ ...meta, applied: true, applied_at: nowDatetime() }),
+    $id: eventId,
+  });
+}
+
+function hasAppliedDeferredRespite(caseId) {
+  const rows = query(
+    `SELECT id FROM case_events WHERE case_id = $id AND label = $op LIMIT 1`,
+    { $id: caseId, $op: 'اعمال تغییر استراتژی معوق' }
+  );
+  return rows.length > 0;
+}
 function storeDeferredRespiteShift(caseId, caseData, caseSnapshot, previousCase, historyCtx) {
   insertCaseHistory(caseId, caseData.debtor_id, 'سیستم', DEFER_RESPIRE_OP, caseSnapshot, {
     pending_segment_strategy_shift: true,
@@ -797,7 +813,7 @@ function storeDeferredRespiteShift(caseId, caseData, caseSnapshot, previousCase,
     ...historyCtx,
     skipped_actions: [],
     start_action: null,
-    note: 'Respite Time — تغییر استراتژی پس از رسیدن next_action_date اعمال می‌شود',
+    note: 'Respite Time — تغییر استراتژی پس از رسیدن respite_until اعمال می‌شود',
   });
 }
 
@@ -814,8 +830,8 @@ function processDeferredCeiStrategyShifts() {
 
   for (const caseRow of activeCases) {
     const deferComplete = query(
-      `SELECT details FROM case_history
-       WHERE case_id = $id AND operation = $op
+      `SELECT details FROM case_events
+       WHERE case_id = $id AND label = $op
        ORDER BY id DESC LIMIT 1`,
       { $id: caseRow.id, $op: DEFER_STRATEGY_COMPLETE_OP }
     )[0];
@@ -858,8 +874,8 @@ function processDeferredCeiStrategyShifts() {
     }
 
     const deferRespite = query(
-      `SELECT details FROM case_history
-       WHERE case_id = $id AND operation = $op AND details LIKE '%pending_segment_strategy_shift%'
+      `SELECT id, details FROM case_events
+       WHERE case_id = $id AND label = $op AND details LIKE '%pending_segment_strategy_shift%'
        ORDER BY id DESC LIMIT 1`,
       { $id: caseRow.id, $op: DEFER_RESPIRE_OP }
     )[0];
@@ -873,9 +889,16 @@ function processDeferredCeiStrategyShifts() {
       continue;
     }
     if (!meta.pending_segment_strategy_shift || meta.applied) continue;
-    if (!isActionDue(caseRow.next_action_date)) continue;
+
+    if (hasAppliedDeferredRespite(caseRow.id)) {
+      markDeferRespiteApplied(deferRespite.id, meta);
+      continue;
+    }
+
+    if (!isRespiteUntilDue(meta)) continue;
+
     if (meta.segment_previous_id === meta.segment_new_id) {
-      meta.applied = true;
+      markDeferRespiteApplied(deferRespite.id, { ...meta, note: 'سگمنت در meta تغییر نکرد — defer بسته شد' });
       continue;
     }
 
@@ -910,13 +933,21 @@ function processDeferredCeiStrategyShifts() {
       }
     );
 
+    markDeferRespiteApplied(deferRespite.id, meta);
+
+    const updatedCase = getCaseById(caseRow.id);
     insertCaseHistory(
       caseRow.id,
       caseRow.debtor_id,
       'سیستم',
       'اعمال تغییر استراتژی معوق',
-      getCaseById(caseRow.id),
-      { applied: true, deferred_from: DEFER_RESPIRE_OP }
+      updatedCase,
+      {
+        applied: true,
+        deferred_from: DEFER_RESPIRE_OP,
+        segment_new_id: meta.segment_new_id,
+        strategy_new_id: updatedCase?.strategy_id ?? null,
+      }
     );
     processed += 1;
   }
@@ -1239,9 +1270,11 @@ function importCasesFromRows(rows, userName = 'ادمین') {
     }
 
     try {
-      const outcome = processRow(validation.data, userName);
-      if (outcome.action === 'created') result.created += 1;
-      else result.updated += 1;
+      transaction(() => {
+        const outcome = processRow(validation.data, userName);
+        if (outcome.action === 'created') result.created += 1;
+        else result.updated += 1;
+      });
     } catch (err) {
       const reason = err.message || 'خطای نامشخص';
       result.errors.push({ row: rowNum, credit_id: validation.creditId, reason });

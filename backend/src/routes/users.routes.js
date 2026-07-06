@@ -16,7 +16,7 @@ router.use(authorize('admin_panel', 'view'));
 /**
  * GET /api/users?has_role=true|false&without_role=negotiator
  */
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
     const hasRole = req.query.has_role;
     const withoutRole = req.query.without_role;
@@ -65,15 +65,14 @@ router.get('/', (req, res) => {
 
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/users]', err);
-    res.status(500).json({ error: 'خطا در دریافت کاربران' });
+    next(err);
   }
 });
 
 /**
  * POST /api/users/:id/assign-admin
  */
-router.post('/:id/assign-admin', (req, res) => {
+router.post('/:id/assign-admin', (req, res, next) => {
   try {
     const userId = Number(req.params.id);
     const user = query('SELECT id FROM users WHERE id = $id', { $id: userId });
@@ -82,15 +81,14 @@ router.post('/:id/assign-admin', (req, res) => {
     assignRoleToUser(userId, 'admin');
     res.json({ data: loadUserAuthPayload(userId), message: 'نقش ادمین تخصیص یافت' });
   } catch (err) {
-    console.error('[POST /api/users/:id/assign-admin]', err);
-    res.status(500).json({ error: 'خطا در تخصیص نقش ادمین' });
+    next(err);
   }
 });
 
 /**
  * DELETE /api/users/:id/remove-admin
  */
-router.delete('/:id/remove-admin', (req, res) => {
+router.delete('/:id/remove-admin', (req, res, next) => {
   try {
     const userId = Number(req.params.id);
     const user = query('SELECT id, is_super_admin FROM users WHERE id = $id', { $id: userId });
@@ -117,8 +115,7 @@ router.delete('/:id/remove-admin', (req, res) => {
     removeRoleFromUser(userId, 'admin');
     res.json({ data: loadUserAuthPayload(userId), message: 'نقش ادمین حذف شد' });
   } catch (err) {
-    console.error('[DELETE /api/users/:id/remove-admin]', err);
-    res.status(500).json({ error: 'خطا در حذف نقش ادمین' });
+    next(err);
   }
 });
 

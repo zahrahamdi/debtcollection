@@ -26,6 +26,13 @@ const REPEAT_RESULTS_BY_TYPE = {
   negotiator_call: ['پاسخگو بود', 'پاسخگو نبود', 'ناسزا گفت'],
 }
 
+function defaultRepeatOnResults(actionType) {
+  if (actionType === 'warning_sms' || actionType === 'threatening_sms') return ['ارسال نشد']
+  if (AUTOCALL_TYPES.includes(actionType)) return ['پاسخگو نبود', 'اشغال بود']
+  if (actionType === 'negotiator_call') return ['پاسخگو نبود']
+  return []
+}
+
 export function normalizeStrategyAction(a) {
   let repeat_on_results = a.repeat_on_results
   if (typeof repeat_on_results === 'string') {
@@ -36,6 +43,9 @@ export function normalizeStrategyAction(a) {
     }
   }
   if (!Array.isArray(repeat_on_results)) repeat_on_results = []
+  if (!repeat_on_results.length && a.action_type) {
+    repeat_on_results = defaultRepeatOnResults(a.action_type)
+  }
   return { ...a, repeat_on_results }
 }
 
@@ -55,7 +65,7 @@ const newAction = () => ({
   wait_next_minutes: 1440,
   wait_repeat_minutes: 60,
   max_repeat: 3,
-  repeat_on_results: [],
+  repeat_on_results: ['ارسال نشد'],
   cost: 0,
   avg_call_duration: '',
 })
@@ -180,7 +190,13 @@ export default function StrategyActionsBuilder({ actions, onChange }) {
                 <select
                   className={`${inputClass} mr-2 flex-1`}
                   value={a.action_type}
-                  onChange={(e) => update(i, { action_type: e.target.value, repeat_on_results: [] })}
+                  onChange={(e) => {
+                    const action_type = e.target.value
+                    update(i, {
+                      action_type,
+                      repeat_on_results: defaultRepeatOnResults(action_type),
+                    })
+                  }}
                 >
                   {ACTION_OPTIONS.map((k) => (
                     <option key={k} value={k}>

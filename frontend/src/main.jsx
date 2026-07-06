@@ -4,17 +4,20 @@ import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import './index.css'
 import App from './App.jsx'
+import { AuthProvider } from './context/AuthContext.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
-      <Toaster
-        position="top-center"
-        toastOptions={{
-          style: { fontFamily: 'Vazirmatn, Tahoma, sans-serif', fontSize: '14px' },
-        }}
-      />
+      <AuthProvider>
+        <App />
+        <Toaster
+          position="top-center"
+          toastOptions={{
+            style: { fontFamily: 'Vazirmatn, Tahoma, sans-serif', fontSize: '14px' },
+          }}
+        />
+      </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
 )

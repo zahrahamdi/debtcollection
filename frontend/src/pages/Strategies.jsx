@@ -11,8 +11,8 @@ import {
 import { fetchSegments } from '../api/segments'
 import StrategyActionsBuilder, { normalizeStrategyAction } from '../components/admin/StrategyActionsBuilder'
 import AbTestModal from '../components/admin/AbTestModal'
-import { getCurrentUser, getUserDisplayName, isAdmin } from '../utils/auth'
-import { toFaDigits, orDash } from '../utils/format'
+import { useAuth } from '../context/AuthContext'
+import { toFaDigits, orDash, formatSqliteDateTime, jalaliDateTimeStyle } from '../utils/format'
 import { creditTypeLabel } from '../utils/constants'
 import Modal from '../components/modal/Modal'
 
@@ -21,16 +21,13 @@ const inputClass =
 
 function formatWhen(value) {
   if (!value) return '—'
-  try {
-    return new Date(value.replace(' ', 'T') + 'Z').toLocaleDateString('fa-IR')
-  } catch {
-    return value
-  }
+  return <span style={jalaliDateTimeStyle}>{formatSqliteDateTime(value)}</span>
 }
 
 const emptyForm = { title: '', credit_type: 'loan', segment_id: '', actions: [] }
 
 export default function Strategies() {
+  const { isAdmin } = useAuth()
   const [rows, setRows] = useState([])
   const [segments, setSegments] = useState({ loan: [], bnpl: [] })
   const [loading, setLoading] = useState(true)
@@ -113,7 +110,6 @@ export default function Strategies() {
       title: form.title.trim(),
       credit_type: form.credit_type,
       segment_id: Number(form.segment_id),
-      created_by: getUserDisplayName(getCurrentUser()),
       actions: form.actions,
     }
     try {
@@ -146,7 +142,7 @@ export default function Strategies() {
     'سگمنت',
     'نوع اعتبار',
     'تعداد پرونده فعال',
-    'نرخ موفقیت',
+    'نرخ تبدیل',
     'سناریو A/B Test',
     'نرخ توزیع',
     'ایجادکننده',

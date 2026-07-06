@@ -21,7 +21,6 @@ const {
   CONVERSION_ACTION_TYPES,
   strategyStats,
   getCasesReport,
-  getFunnelReport,
   getStrategiesPerformance,
   getStrategiesCost,
   getNegotiatorsReport,
@@ -32,7 +31,7 @@ router.use(authorize('reports', 'view'));
 /**
  * GET /api/reports/summary
  */
-router.get('/summary', (req, res) => {
+router.get('/summary', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const where = buildCaseWhere(filters, { dateField: 'created_at' });
@@ -77,13 +76,14 @@ router.get('/summary', (req, res) => {
     const costJoinStr = costWhere.joins.length ? ` ${costWhere.joins.join(' ')}` : '';
 
     const costRows = query(
-      `SELECT ca.action_type, SUM(ca.cost) AS total_cost
-       FROM case_actions ca
-       INNER JOIN cases c ON c.id = ca.case_id${costJoinStr}
+      `SELECT ce.action_type, SUM(ce.cost) AS total_cost
+       FROM case_events ce
+       INNER JOIN cases c ON c.id = ce.case_id${costJoinStr}
        WHERE ${costWhere.clause}
-       ${filters.from_date ? 'AND ca.action_date >= $from_jalali' : ''}
-       ${filters.to_date ? 'AND ca.action_date <= $to_jalali' : ''}
-       GROUP BY ca.action_type`,
+         AND ce.event_type = 'action'
+       ${filters.from_date ? 'AND ce.created_at >= $from_jalali' : ''}
+       ${filters.to_date ? 'AND ce.created_at <= $to_jalali' : ''}
+       GROUP BY ce.action_type`,
       {
         ...costWhere.params,
         ...(filters.from_date ? { $from_jalali: filters.from_date } : {}),
@@ -118,85 +118,66 @@ router.get('/summary', (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[GET /api/reports/summary]', err);
-    res.status(500).json({ error: 'خطا در دریافت خلاصه گزارش' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/cases
  */
-router.get('/cases', (req, res) => {
+router.get('/cases', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const result = getCasesReport(filters);
     res.json({ data: result });
   } catch (err) {
-    console.error('[GET /api/reports/cases]', err);
-    res.status(500).json({ error: 'خطا در دریافت گزارش پرونده‌ها' });
-  }
-});
-
-/**
- * GET /api/reports/funnel
- */
-router.get('/funnel', (req, res) => {
-  try {
-    const filters = parseFilters(req.query);
-    const result = getFunnelReport(filters);
-    res.json({ data: result });
-  } catch (err) {
-    console.error('[GET /api/reports/funnel]', err);
-    res.status(500).json({ error: 'خطا در دریافت گزارش قیف' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/strategies/performance
  */
-router.get('/strategies/performance', (req, res) => {
+router.get('/strategies/performance', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const result = getStrategiesPerformance(filters);
     res.json({ data: result });
   } catch (err) {
-    console.error('[GET /api/reports/strategies/performance]', err);
-    res.status(500).json({ error: 'خطا در دریافت گزارش عملکرد استراتژی‌ها' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/strategies/cost
  */
-router.get('/strategies/cost', (req, res) => {
+router.get('/strategies/cost', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const result = getStrategiesCost(filters);
     res.json({ data: result });
   } catch (err) {
-    console.error('[GET /api/reports/strategies/cost]', err);
-    res.status(500).json({ error: 'خطا در دریافت گزارش هزینه استراتژی‌ها' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/negotiators
  */
-router.get('/negotiators', (req, res) => {
+router.get('/negotiators', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const result = getNegotiatorsReport(filters);
     res.json({ data: result });
   } catch (err) {
-    console.error('[GET /api/reports/negotiators]', err);
-    res.status(500).json({ error: 'خطا در دریافت گزارش مذاکره‌کنندگان' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/meta
  */
-router.get('/meta', (_req, res) => {
+router.get('/meta', (_req, res, next) => {
   try {
     const rows = query(
       `SELECT DISTINCT province FROM debtors
@@ -205,28 +186,28 @@ router.get('/meta', (_req, res) => {
     );
     res.json({ data: { provinces: rows.map((r) => r.province) } });
   } catch (err) {
-    console.error('[GET /api/reports/meta]', err);
-    res.status(500).json({ error: 'خطا در دریافت متادیتای گزارش' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/action-conversion
  */
-router.get('/action-conversion', (req, res) => {
+router.get('/action-conversion', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
     const where = buildActionDateCaseWhere(filters);
     const joinStr = where.joins.length ? ` ${where.joins.join(' ')}` : '';
 
     const actions = query(
-      `SELECT ca.id, ca.case_id, ca.action_type, ca.action_date
-       FROM case_actions ca
-       INNER JOIN cases c ON c.id = ca.case_id${joinStr}
+      `SELECT ce.rowid AS id, ce.case_id, ce.action_type, ce.created_at AS action_date
+       FROM case_events ce
+       INNER JOIN cases c ON c.id = ce.case_id${joinStr}
        WHERE ${where.clause}
-         AND ca.action_type IN ($t1, $t2, $t3, $t4, $t5)
-         ${filters.from_date ? 'AND ca.action_date >= $from_jalali' : ''}
-         ${filters.to_date ? 'AND ca.action_date <= $to_jalali' : ''}`,
+         AND ce.event_type = 'action'
+         AND ce.action_type IN ($t1, $t2, $t3, $t4, $t5)
+         ${filters.from_date ? 'AND ce.created_at >= $from_jalali' : ''}
+         ${filters.to_date ? 'AND ce.created_at <= $to_jalali' : ''}`,
       {
         ...where.params,
         $t1: 'warning_sms',
@@ -273,15 +254,14 @@ router.get('/action-conversion', (req, res) => {
 
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/reports/action-conversion]', err);
-    res.status(500).json({ error: 'خطا در دریافت نرخ تبدیل اقدام‌ها' });
+    next(err);
   }
 });
 
 /**
  * GET /api/reports/ab-tests
  */
-router.get('/ab-tests', (req, res) => {
+router.get('/ab-tests', (req, res, next) => {
   try {
     const filters = parseFilters(req.query);
 
@@ -328,8 +308,7 @@ router.get('/ab-tests', (req, res) => {
 
     res.json({ data });
   } catch (err) {
-    console.error('[GET /api/reports/ab-tests]', err);
-    res.status(500).json({ error: 'خطا در دریافت نتایج A/B Test' });
+    next(err);
   }
 });
 

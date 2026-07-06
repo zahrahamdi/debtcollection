@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Save, Clock, CalendarClock, HandCoins } from 'lucide-react'
 import { fetchSettings, updateSettings, fetchSettingsHistory } from '../../api/settings'
-import { toFaDigits } from '../../utils/format'
+import { toFaDigits, formatSqliteDateTime, jalaliDateTimeStyle } from '../../utils/format'
 import Modal from '../modal/Modal'
 
 // کارت‌های تنظیمات عمومی (Story 11.4 PRD)
@@ -31,11 +31,8 @@ const inputClass =
   'w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100'
 
 function formatWhen(value) {
-  try {
-    return new Date(value.replace(' ', 'T') + 'Z').toLocaleString('fa-IR')
-  } catch {
-    return value
-  }
+  if (!value) return '—'
+  return <span style={jalaliDateTimeStyle}>{formatSqliteDateTime(value)}</span>
 }
 
 // جدول تاریخچه تغییرات هر کارت (Story 11.4 AC5 — «تاریخچه تغییرات هر کارت نگهداری می‌شود»)

@@ -40,7 +40,7 @@ function mapInstallmentRow(row) {
  * لیست اقساط یک پرونده.
  * Query: installment_status, debt_class, payment_status (unpaid | paid)
  */
-router.get('/:id/installments', (req, res) => {
+router.get('/:id/installments', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const { installment_status, debt_class, payment_status } = req.query;
@@ -106,8 +106,7 @@ router.get('/:id/installments', (req, res) => {
       case: caseRows[0],
     });
   } catch (err) {
-    console.error('[GET /api/cases/:id/installments]', err);
-    res.status(500).json({ error: 'خطا در دریافت اقساط پرونده' });
+    next(err);
   }
 });
 

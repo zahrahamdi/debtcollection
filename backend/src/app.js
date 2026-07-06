@@ -1,7 +1,10 @@
 'use strict';
 
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const cors = require('cors');
 const { authenticate, requireAdmin } = require('./middleware/auth.middleware');
+const { errorHandler } = require('./middleware/error.middleware');
 
 const healthRouter = require('./routes/health');
 const authRouter = require('./routes/auth.routes');
@@ -25,7 +28,13 @@ const installmentsRoutes = require('./routes/installments');
 function createApp() {
   const app = express();
 
-  app.use(require('cors')());
+  app.use(
+    cors({
+      origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+      credentials: true,
+    })
+  );
+  app.use(cookieParser());
   app.use(express.json());
 
   app.use('/api/health', healthRouter);
@@ -49,6 +58,8 @@ function createApp() {
   app.use((req, res) => {
     res.status(404).json({ error: 'مسیر مورد نظر یافت نشد' });
   });
+
+  app.use(errorHandler);
 
   return app;
 }

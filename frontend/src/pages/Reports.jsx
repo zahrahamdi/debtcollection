@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Navigate } from 'react-router-dom'
 import { format, startOfMonth, endOfMonth } from 'date-fns-jalali'
 import {
@@ -27,7 +28,6 @@ import {
 } from 'recharts'
 import {
   fetchCasesReport,
-  fetchFunnelReport,
   fetchStrategiesPerformance,
   fetchStrategiesCost,
   fetchNegotiatorsReport,
@@ -35,7 +35,6 @@ import {
 import { fetchSegments } from '../api/segments'
 import { fetchStrategies } from '../api/strategies'
 import { fetchNegotiators } from '../api/negotiators'
-import FunnelFlowChart from '../components/reports/FunnelFlowChart'
 import CostByActionChart from '../components/charts/CostByActionChart'
 import ActionDistributionPieChart from '../components/charts/ActionDistributionPieChart'
 import {
@@ -48,7 +47,7 @@ import {
   formatChartPercent,
   numericAxisTickProps,
 } from '../components/charts/chartUtils'
-import { isAdmin } from '../utils/auth'
+import { useAuth } from '../context/AuthContext'
 import { formatRial, toEnDigits, toFaDigits, orDash } from '../utils/format'
 import { CASE_STATUS, cooperationTypeLabel } from '../utils/constants'
 
@@ -138,19 +137,72 @@ function ReportPieChart({ data, tooltipFormatter, height = 400 }) {
   )
 }
 
+function InfoHint({ text, className = '' }) {
+  const anchorRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+
+  const updatePos = () => {
+    const rect = anchorRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setPos({
+      top: rect.bottom + 8,
+      left: rect.left + rect.width / 2,
+    })
+  }
+
+  const show = () => {
+    updatePos()
+    setOpen(true)
+  }
+
+  const hide = () => setOpen(false)
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        className={`inline-flex shrink-0 rounded-full p-0.5 text-brand-500 hover:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-brand-200 ${className}`}
+        aria-label="راهنما"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-none fixed z-[9999] w-64 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2.5 text-[10px] font-normal leading-relaxed text-slate-600 shadow-lg"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            {text}
+          </div>,
+          document.body
+        )}
+    </>
+  )
+}
+
+function ColumnHint({ label, hint }) {
+  if (!hint) return label
+  return (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <InfoHint text={hint} />
+    </span>
+  )
+}
+
 function StatCard({ label, value, sub, loading, infoHint }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-panel">
       <p className="flex items-center gap-1 text-xs text-slate-400">
         {label}
-        {infoHint && (
-          <span className="group relative">
-            <Info className="h-3.5 w-3.5 cursor-help text-brand-500" />
-            <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-64 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2 text-[10px] leading-relaxed text-slate-600 shadow-lg group-hover:block">
-              {infoHint}
-            </span>
-          </span>
-        )}
+        {infoHint && <InfoHint text={infoHint} />}
       </p>
       {loading ? (
         <div className="mt-2 h-7 w-24 animate-pulse rounded-lg bg-slate-100" />
@@ -280,6 +332,7 @@ function SortHeader({ label, sortKey, sort, onSort }) {
 }
 
 export default function Reports() {
+  const { isAdmin } = useAuth()
   const [mainTab, setMainTab] = useState('cases')
   const [strategySubTab, setStrategySubTab] = useState('performance')
   const monthRange = currentJalaliMonthRange()
@@ -304,12 +357,6 @@ export default function Reports() {
     strategy_id: '',
   })
 
-  const [funnelFilters, setFunnelFilters] = useState({
-    ...monthRange,
-    credit_type: 'loan',
-    strategy_id: '',
-  })
-
   const [negFilters, setNegFilters] = useState({
     negotiator_id: '',
     cooperation_type: '',
@@ -320,13 +367,11 @@ export default function Reports() {
   const [negotiators, setNegotiators] = useState([])
 
   const [casesData, setCasesData] = useState(null)
-  const [funnelData, setFunnelData] = useState({ total_cases: 0, legal_cases: 0, steps: [] })
   const [perfData, setPerfData] = useState(null)
   const [costData, setCostData] = useState(null)
   const [negData, setNegData] = useState(null)
 
   const [loadingCases, setLoadingCases] = useState(false)
-  const [loadingFunnel, setLoadingFunnel] = useState(false)
   const [loadingPerf, setLoadingPerf] = useState(false)
   const [loadingCost, setLoadingCost] = useState(false)
   const [loadingNeg, setLoadingNeg] = useState(false)
@@ -361,19 +406,6 @@ export default function Reports() {
       .catch(console.error)
       .finally(() => setLoadingCases(false))
   }, [casesFilters])
-
-  const loadFunnel = useCallback(() => {
-    setLoadingFunnel(true)
-    fetchFunnelReport({
-      from_date: toEnDigits(funnelFilters.from_date),
-      to_date: toEnDigits(funnelFilters.to_date),
-      credit_type: funnelFilters.credit_type || undefined,
-      strategy_id: funnelFilters.strategy_id || undefined,
-    })
-      .then(setFunnelData)
-      .catch(console.error)
-      .finally(() => setLoadingFunnel(false))
-  }, [funnelFilters])
 
   const loadPerformance = useCallback(() => {
     setLoadingPerf(true)
@@ -435,7 +467,13 @@ export default function Reports() {
       totalCalls: rows.reduce((s, r) => s + (r.total_calls || 0), 0),
       avgSuccess: rows.reduce((s, r) => s + (r.success_rate || 0), 0) / rows.length,
       totalCost: rows.reduce((s, r) => s + (r.total_cost || 0), 0),
-      avgPromise: rows.reduce((s, r) => s + (r.promise_fulfillment_rate || 0), 0) / rows.length,
+      avgPromise:
+        rows.filter((r) => r.promise_fulfillment_rate != null).length > 0
+          ? rows
+              .filter((r) => r.promise_fulfillment_rate != null)
+              .reduce((s, r) => s + r.promise_fulfillment_rate, 0) /
+            rows.filter((r) => r.promise_fulfillment_rate != null).length
+          : null,
     }
   }, [negData])
 
@@ -571,6 +609,7 @@ export default function Reports() {
                   : '—'
               }
               loading={loadingCases}
+              infoHint="میانگین فاصله بین تاریخ ایجاد پرونده و تاریخ اولین پرداخت، فقط برای پرونده‌های پرداخت‌شده. مثلاً اگر یک پرونده ۵.۵ روز بعد از ایجاد پرداخت شده باشد، همین عدد نمایش داده می‌شود."
             />
             <StatCard
               label="نسبت هزینه به وصول"
@@ -648,7 +687,6 @@ export default function Reports() {
             {[
               ['performance', 'عملکرد استراتژی‌ها'],
               ['cost', 'هزینه و وصول'],
-              ['funnel', 'Funnel'],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -657,7 +695,6 @@ export default function Reports() {
                   setStrategySubTab(id)
                   if (id === 'performance') loadPerformance()
                   if (id === 'cost') loadCost()
-                  if (id === 'funnel') loadFunnel()
                 }}
                 className={[
                   'rounded-lg px-3 py-1.5 text-xs font-medium',
@@ -725,7 +762,7 @@ export default function Reports() {
                         <th className="px-4 py-3">استراتژی</th>
                         <th className="px-4 py-3">سگمنت</th>
                         <th className="px-4 py-3">پرونده</th>
-                        <th className="px-4 py-3">نرخ موفقیت</th>
+                        <th className="px-4 py-3"><ColumnHint label="نرخ تبدیل" hint="درصد پرونده‌های تخصیص‌یافته به این استراتژی که به وضعیت پرداخت‌شده رسیده‌اند." /></th>
                         <th className="px-4 py-3">میانگین روز</th>
                         <th className="px-4 py-3">هزینه کل</th>
                         <th className="px-4 py-3">مبلغ وصول‌شده</th>
@@ -760,10 +797,14 @@ export default function Reports() {
 
               <div className="space-y-4">
                 <h3 className="text-sm font-bold text-slate-700">نتایج A/B Test</h3>
-                {loadingPerf ? null : (perfData?.ab_test_results ?? []).length === 0 ? (
+                {loadingPerf ? null : (perfData?.ab_test_results ?? []).filter(
+                  (ab) => ab.strategy_a?.title && ab.strategy_b?.title
+                ).length === 0 ? (
                   <EmptyChart message="سناریوی A/B Test تعریف نشده است" />
                 ) : (
-                  perfData.ab_test_results.map((ab) => (
+                  perfData.ab_test_results
+                    .filter((ab) => ab.strategy_a?.title && ab.strategy_b?.title)
+                    .map((ab) => (
                     <div key={ab.scenario_name} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-panel">
                       <h4 className="mb-3 font-bold text-slate-800">{ab.scenario_name}</h4>
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -785,7 +826,7 @@ export default function Reports() {
                               استراتژی {key.toUpperCase()}: {data.title}
                             </p>
                             <dl className="space-y-1 text-xs text-slate-600">
-                              <div className="flex justify-between"><dt>نرخ موفقیت</dt><dd>{pct(data.success_rate)}</dd></div>
+                              <div className="flex justify-between"><dt>نرخ تبدیل</dt><dd>{pct(data.success_rate)}</dd></div>
                               <div className="flex justify-between">
                                 <dt>میانگین زمان</dt>
                                 <dd>{data.avg_days != null ? `${toFaDigits(data.avg_days)} روز` : '—'}</dd>
@@ -795,6 +836,11 @@ export default function Reports() {
                           </div>
                         ))}
                       </div>
+                      {ab.winner == null && (
+                        <p className="mt-3 text-center text-xs text-slate-500">
+                          داده کافی برای تعیین برنده وجود ندارد
+                        </p>
+                      )}
                     </div>
                   ))
                 )}
@@ -854,7 +900,7 @@ export default function Reports() {
                   loading={loadingCost}
                 />
                 <StatCard
-                  label="هزینه اتوکال‌ها"
+                  label="هزینه تماس‌های خودکار"
                   value={`${formatRial(costData?.summary?.total_autocall_cost)} ریال`}
                   loading={loadingCost}
                 />
@@ -880,7 +926,7 @@ export default function Reports() {
                   )}
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-panel">
-                  <h3 className="mb-4 text-sm font-bold text-slate-700">توزیع وصول</h3>
+                  <h3 className="mb-4 text-sm font-bold text-slate-700">توزیع دفعات وصول</h3>
                   {loadingCost ? (
                     <div className="h-[400px] animate-pulse rounded-xl bg-slate-100" />
                   ) : !(costData?.collection_distribution?.some((d) => d.value > 0)) ? (
@@ -888,7 +934,7 @@ export default function Reports() {
                   ) : (
                     <ActionDistributionPieChart
                       distribution={costData.collection_distribution}
-                      tooltipFormatter={(v) => formatRial(v)}
+                      tooltipFormatter={(v) => `${toFaDigits(String(v))} وصول`}
                     />
                   )}
                 </div>
@@ -913,9 +959,20 @@ export default function Reports() {
                         <th className="px-4 py-3">نوع اقدام</th>
                         <th className="px-4 py-3">تعداد اجرا</th>
                         <th className="px-4 py-3">هزینه کل</th>
+                        <th className="px-4 py-3">
+                          <ColumnHint
+                            label="تعداد وصول"
+                            hint="تعداد دفعاتی که پرداخت (جزئی یا کامل) انجام شده و به آخرین اجرای همان اقدام قبل از پرداخت نسبت داده شده — هر پرداخت جداگانه شمرده می‌شود."
+                          />
+                        </th>
                         <th className="px-4 py-3">مبلغ وصول</th>
                         <th className="px-4 py-3">نسبت هزینه به وصول</th>
-                        <th className="px-4 py-3">نرخ تبدیل</th>
+                        <th className="px-4 py-3">
+                          <ColumnHint
+                            label="نرخ تبدیل"
+                            hint="تعداد اجراهای یکتایی که حداقل یک وصول داشته ÷ تعداد کل اجرا. اگر بعد از یک اجرا دو بار پرداخت شود، در نرخ تبدیل یک‌بار شمرده می‌شود (در «تعداد وصول» دو‌بار)."
+                          />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -924,6 +981,7 @@ export default function Reports() {
                           <td className="px-4 py-3">{row.label}</td>
                           <td className="px-4 py-3">{toFaDigits(row.execution_count)}</td>
                           <td className="px-4 py-3">{formatRial(row.total_cost)}</td>
+                          <td className="px-4 py-3">{toFaDigits(String(row.payment_count ?? 0))}</td>
                           <td className="px-4 py-3">{formatRial(row.total_collected)}</td>
                           <td className="px-4 py-3">{formatRatioDecimal(row.cost_to_collection_ratio)}</td>
                           <td className="px-4 py-3">{pct(row.conversion_rate)}</td>
@@ -932,42 +990,6 @@ export default function Reports() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {strategySubTab === 'funnel' && (
-            <div className="space-y-4">
-              <FilterPanel onApply={loadFunnel} loading={loadingFunnel} hint={<CreatedDateHint />}>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <DateRangeFields
-                    from={funnelFilters.from_date}
-                    to={funnelFilters.to_date}
-                    onFrom={(e) => setFunnelFilters((f) => ({ ...f, from_date: e.target.value }))}
-                    onTo={(e) => setFunnelFilters((f) => ({ ...f, to_date: e.target.value }))}
-                  />
-                  <CreditTypeSelect
-                    required
-                    value={funnelFilters.credit_type}
-                    onChange={(e) => setFunnelFilters((f) => ({ ...f, credit_type: e.target.value }))}
-                  />
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-400">استراتژی</label>
-                    <select
-                      value={funnelFilters.strategy_id}
-                      onChange={(e) => setFunnelFilters((f) => ({ ...f, strategy_id: e.target.value }))}
-                      className={inputClass}
-                    >
-                      <option value="">کلی</option>
-                      {strategies.map((s) => (
-                        <option key={s.id} value={s.id}>{s.title}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </FilterPanel>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-panel">
-                <FunnelFlowChart funnel={funnelData} loading={loadingFunnel} />
               </div>
             </div>
           )}
@@ -1009,13 +1031,13 @@ export default function Reports() {
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard label="کل تماس‌ها" value={toFaDigits(negTotals?.totalCalls ?? 0)} loading={loadingNeg} />
-            <StatCard label="میانگین نرخ موفقیت" value={negTotals ? pct(round2(negTotals.avgSuccess)) : pct(0)} loading={loadingNeg} />
+            <StatCard label="میانگین نرخ وصول پرونده" value={negTotals ? pct(round2(negTotals.avgSuccess)) : pct(0)} loading={loadingNeg} infoHint="درصد پرونده‌های تخصیص‌یافته به هر مذاکره‌کننده که پرداخت شده‌اند — نه نرخ پاسخ تماس." />
             <StatCard label="مجموع هزینه تماس‌ها" value={`${formatRial(negTotals?.totalCost ?? 0)} ریال`} loading={loadingNeg} />
             <StatCard
               label="میانگین نرخ وفای به تعهد"
-              value={negTotals ? pct(round2(negTotals.avgPromise)) : pct(0)}
+              value={negTotals ? pct(negTotals.avgPromise != null ? round2(negTotals.avgPromise) : null) : '—'}
               loading={loadingNeg}
-              infoHint="نرخ وفای به تعهد یعنی از کل تعهدات پرداختی که مذاکره‌کننده از مشتریان گرفته، چند درصد آن‌ها واقعاً پرداخت شده‌اند. مثلاً اگر مذاکره‌کننده ۱۰ تعهد پرداخت گرفته و ۷ تای آن‌ها fulfilled شده‌اند، نرخ وفای به تعهد او ۷۰٪ است."
+              infoHint="نرخ وفای به تعهد = تعهدات fulfilled ÷ (fulfilled + broken). تعهدات pending در این محاسبه دخیل نیستند."
             />
           </div>
 
@@ -1028,10 +1050,10 @@ export default function Reports() {
                     <th className="px-4 py-3">نوع همکاری</th>
                     <th className="px-4 py-3"><SortHeader label="پرونده فعال" sortKey="active_cases" sort={negSort} onSort={setNegSort} /></th>
                     <th className="px-4 py-3"><SortHeader label="تماس" sortKey="total_calls" sort={negSort} onSort={setNegSort} /></th>
-                    <th className="px-4 py-3"><SortHeader label="نرخ موفقیت" sortKey="success_rate" sort={negSort} onSort={setNegSort} /></th>
+                    <th className="px-4 py-3"><SortHeader label="نرخ وصول" sortKey="success_rate" sort={negSort} onSort={setNegSort} /></th>
                     <th className="px-4 py-3"><SortHeader label="میانگین مدت" sortKey="avg_call_duration" sort={negSort} onSort={setNegSort} /></th>
                     <th className="px-4 py-3"><SortHeader label="هزینه" sortKey="total_cost" sort={negSort} onSort={setNegSort} /></th>
-                    <th className="px-4 py-3">تعهد / وفا</th>
+                    <th className="px-4 py-3"><ColumnHint label="وفا / تعهد" hint="تعداد تعهدات پرداخت محقق‌شده (وفا) به‌نسبت کل تعهدات گرفته‌شده (تعهد). مثلاً ۲/۴ یعنی از ۴ تعهد، ۲ مورد پرداخت شده." /></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1052,7 +1074,15 @@ export default function Reports() {
                         </td>
                         <td className="px-4 py-3">{formatRial(row.total_cost)}</td>
                         <td className="px-4 py-3">
-                          {toFaDigits(row.promises_fulfilled)}/{toFaDigits(row.promises_made)} ({pct(row.promise_fulfillment_rate)})
+                          {row.promise_fulfillment_rate != null ? (
+                            <>
+                              {toFaDigits(row.promises_fulfilled)}/
+                              {toFaDigits((row.promises_fulfilled || 0) + (row.promises_broken || 0))}{' '}
+                              ({pct(row.promise_fulfillment_rate)})
+                            </>
+                          ) : (
+                            '—'
+                          )}
                         </td>
                       </tr>
                     ))

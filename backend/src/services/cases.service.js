@@ -1,11 +1,10 @@
 'use strict';
 
-const { query, run } = require('../db/database');
+const { query, run, transaction } = require('../db/database');
 const {
   calcActionStatus,
   daysDiffFromToday,
   nowDatetime,
-  nowJalaliDateTime,
   jalaliDateTimeToDatetime,
   isTimeWithinAllowedWindow,
   isJalaliDatetimeInPast,
@@ -16,9 +15,17 @@ const {
   todayJalali,
 } = require('../db/dateUtil');
 const { sendSms, replacePlaceholders, NO_ANSWER_SMS_TEXT, PAYMENT_LINK_SMS_TEMPLATE } = require('../services/sms.service');
-const { parseRepeatOnResults } = require('../db/strategyActions');
+const { effectiveRepeatOnResults } = require('../db/strategyActions');
 const { buildLastActionMap, resolveLastAction, ASSIGN_OPERATION } = require('../db/lastAction');
 const { userDisplayName } = require('../services/auth.service');
+const {
+  insertActionEvent,
+  insertHistoryEvent,
+  listCaseEvents,
+  countRecentEvents,
+  maxActionSeq,
+  mapEventToLegacyAction,
+} = require('../db/caseEvents');
 
 const DEFAULT_LIMIT = 100;
 
@@ -103,7 +110,7 @@ function computeNegotiatorStage(strategyId) {
     wait_next_minutes: neg.wait_next_minutes ?? neg.wait_minutes ?? 0,
     wait_repeat_minutes: neg.wait_repeat_minutes ?? 60,
     max_repeat: neg.max_repeat ?? 3,
-    repeat_on_results: parseRepeatOnResults(neg),
+    repeat_on_results: effectiveRepeatOnResults(neg),
     next_action_type: next ? next.action_type : null,
     next_action_label: next ? STRATEGY_ACTION_LABELS[next.action_type] || next.action_type : null,
   };
@@ -119,15 +126,18 @@ function enrichRow(row, lastActionMap) {
   };
 }
 
-function buildActionStatusSqlCondition(status) {
+function buildActionStatusSqlCondition(status, params) {
+  params.$tehran_now = nowDatetime();
+  params.$tehran_today = nowDatetime().slice(0, 10);
+
   if (status === 'waiting') {
-    return `(c.next_action_date IS NULL OR c.next_action_date > datetime('now', 'localtime'))`;
+    return `(c.next_action_date IS NULL OR c.next_action_date > $tehran_now)`;
   }
   if (status === 'due_today') {
-    return `(c.next_action_date IS NOT NULL AND c.next_action_date <= datetime('now', 'localtime') AND date(c.next_action_date) = date('now', 'localtime'))`;
+    return `(c.next_action_date IS NOT NULL AND c.next_action_date <= $tehran_now AND substr(c.next_action_date, 1, 10) = $tehran_today)`;
   }
   if (status === 'overdue') {
-    return `(c.next_action_date IS NOT NULL AND c.next_action_date <= datetime('now', 'localtime') AND date(c.next_action_date) < date('now', 'localtime'))`;
+    return `(c.next_action_date IS NOT NULL AND c.next_action_date <= $tehran_now AND substr(c.next_action_date, 1, 10) < $tehran_today)`;
   }
   return null;
 }
@@ -166,7 +176,7 @@ function buildListWhereClause(filters) {
     params.$negotiator_name = `%${filters.negotiator_name}%`;
   }
   if (filters.action_status) {
-    const actionSql = buildActionStatusSqlCondition(filters.action_status);
+    const actionSql = buildActionStatusSqlCondition(filters.action_status, params);
     if (actionSql) conditions.push(actionSql);
   }
 
@@ -235,16 +245,29 @@ function getCaseById(caseId) {
   const lastActionMap = buildLastActionMap([id]);
   const caseRow = enrichRow(rows[0], lastActionMap);
 
-  const actions = query(
-    `SELECT * FROM case_actions WHERE case_id = $id ORDER BY id ASC`,
+  const actionEvents = query(
+    `SELECT * FROM case_events
+     WHERE case_id = $id AND event_type IN ('action', 'payment')
+     ORDER BY created_at ASC, id ASC`,
     { $id: id }
   );
+  const actions = actionEvents.map(mapEventToLegacyAction);
 
   const promises = query(
     `SELECT * FROM promises WHERE case_id = $id ORDER BY id DESC`,
     { $id: id }
   );
-  const brokenPromisesCount = promises.filter((p) => p.status === 'broken').length;
+  const strategyFailureCount = query(
+    `SELECT COUNT(*) AS c FROM case_events
+     WHERE case_id = $id AND action_type = 'strategy_failure'`,
+    { $id: id }
+  )[0].c;
+
+  const brokenPromisesCount = query(
+    `SELECT COUNT(*) AS c FROM case_events
+     WHERE case_id = $id AND label = 'نقض تعهد پرداخت'`,
+    { $id: id }
+  )[0].c;
   const activeRows = query(
     `SELECT * FROM promises WHERE case_id = $id AND status = 'pending' ORDER BY id DESC LIMIT 1`,
     { $id: id }
@@ -262,11 +285,6 @@ function getCaseById(caseId) {
       `,
     { $debtorId: caseRow.debtor_id, $id: id }
   );
-
-  const strategyFailureCount = query(
-    `SELECT COUNT(*) AS c FROM case_history WHERE case_id = $id AND operation = 'شکست استراتژی'`,
-    { $id: id }
-  )[0].c;
 
   const negotiatorCallOutcomes = actions.filter(
     (a) => a.action_type === 'negotiator_call' && a.call_status
@@ -341,58 +359,54 @@ function assignCase(caseId, negotiatorId, user) {
     throw new ServiceError(400, 'ظرفیت مذاکره‌کننده تکمیل است و تخصیص انجام نشد');
   }
 
-  if (isReassign) {
-    run(
-      `UPDATE cases SET assigned_negotiator_id = $n, updated_at = datetime('now') WHERE id = $id`,
-      { $n: negotiatorId, $id: id }
-    );
-  } else {
-    const assignNow = nowDatetime();
-    const assignActionStatus = calcActionStatus(assignNow);
-    const assignDate = todayJalali();
-    run(
-      `UPDATE cases SET assigned_negotiator_id = $n, case_status = 'pending_negotiator_call',
-         next_action = $na, next_action_date = $nad, action_status = $as,
-         last_action = $la, last_action_date = $lad, updated_at = datetime('now') WHERE id = $id`,
-      {
-        $n: negotiatorId,
-        $id: id,
-        $na: 'تماس مذاکره‌کننده',
-        $nad: assignNow,
-        $as: assignActionStatus,
-        $la: ASSIGN_OPERATION,
-        $lad: assignDate,
-      }
-    );
-  }
+  return transaction(() => {
+    if (isReassign) {
+      run(
+        `UPDATE cases SET assigned_negotiator_id = $n, updated_at = datetime('now') WHERE id = $id`,
+        { $n: negotiatorId, $id: id }
+      );
+    } else {
+      const assignNow = nowDatetime();
+      const assignActionStatus = calcActionStatus(assignNow);
+      const assignDate = todayJalali();
+      run(
+        `UPDATE cases SET assigned_negotiator_id = $n, case_status = 'pending_negotiator_call',
+           next_action = $na, next_action_date = $nad, action_status = $as,
+           last_action = $la, last_action_date = $lad, updated_at = datetime('now') WHERE id = $id`,
+        {
+          $n: negotiatorId,
+          $id: id,
+          $na: 'تماس مذاکره‌کننده',
+          $nad: assignNow,
+          $as: assignActionStatus,
+          $la: ASSIGN_OPERATION,
+          $lad: assignDate,
+        }
+      );
+    }
 
-  const updated = query('SELECT * FROM cases WHERE id = $id', { $id: id })[0];
-  const op = isReassign ? 'تخصیص مجدد' : 'تخصیص به مذاکره‌کننده';
+    const updated = query('SELECT * FROM cases WHERE id = $id', { $id: id })[0];
+    const op = isReassign ? 'تخصیص مجدد' : 'تخصیص به مذاکره‌کننده';
 
-  run(
-    `INSERT INTO case_history
-        (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-       VALUES ($cid, $did, $user, $op, $status, $na, $nad, $details)`,
-    {
-      $cid: id,
-      $did: c.debtor_id,
-      $user: userName,
-      $op: op,
-      $status: updated.case_status,
-      $na: updated.next_action,
-      $nad: updated.next_action_date,
-      $details: isReassign
+    insertHistoryEvent({
+      case_id: id,
+      operation: op,
+      user_name: userName,
+      case_status: updated.case_status,
+      next_action: updated.next_action,
+      next_action_date: updated.next_action_date,
+      details: isReassign
         ? `مذاکره‌کننده: ${neg.name}`
         : `مذاکره‌کننده: ${neg.name} — نوبت تماس از ${updated.next_action_date}`,
-    }
-  );
+    });
 
-  return {
-    id,
-    assigned_negotiator_id: Number(negotiatorId),
-    case_status: updated.case_status,
-    mode: isReassign ? 'reassign' : 'assign',
-  };
+    return {
+      id,
+      assigned_negotiator_id: Number(negotiatorId),
+      case_status: updated.case_status,
+      mode: isReassign ? 'reassign' : 'assign',
+    };
+  });
 }
 
 async function submitCallOutcome(caseId, body, user) {
@@ -417,19 +431,16 @@ async function submitCallOutcome(caseId, body, user) {
     );
   }
 
-  const recentCall = query(
-    `SELECT id FROM case_actions
-     WHERE case_id = $id AND action_type = 'negotiator_call'
-       AND created_at > datetime('now', '-10 seconds')`,
-    { $id: id }
-  );
+  const recentCall = countRecentEvents(id, 'action', 'negotiator_call', 10);
   if (recentCall.length) {
     throw new ServiceError(400, 'خروجی تماس اخیراً ثبت شده است. لطفاً صبر کنید.');
   }
 
   if (!b.call_status) throw new ServiceError(400, 'وضعیت تماس اجباری است');
 
-  const isNoAnswer = b.call_status === 'پاسخگو نبود' || b.call_status === 'no_answer';
+  const callStatus =
+    b.call_status === 'no_answer' ? 'پاسخگو نبود' : String(b.call_status).trim();
+  const isNoAnswer = callStatus === 'پاسخگو نبود';
   const callDuration = isNoAnswer ? 0 : Number(b.call_duration);
   if (!isNoAnswer && (!callDuration || callDuration <= 0)) {
     throw new ServiceError(400, 'مدت تماس به دقیقه اجباری است');
@@ -499,7 +510,7 @@ async function submitCallOutcome(caseId, body, user) {
     !isDeath &&
     !b.refer_to_legal &&
     repeatOn.length > 0 &&
-    repeatOn.includes(b.call_status) &&
+    repeatOn.includes(callStatus) &&
     attemptsMade < maxRepeat;
 
   let newStatus = 'in_negotiation';
@@ -520,7 +531,8 @@ async function submitCallOutcome(caseId, body, user) {
     newStatus = 'pending_negotiator_recall';
     nextActionDate = computeNextActionDate(waitRepeatMinutes, negWindow);
     nextAction = 'تماس مذاکره‌کننده';
-  } else if (b.call_status === 'پاسخگو نبود') {
+  } else if (isNoAnswer && !shouldRetryNegotiator) {
+    // سقف تماس پر شده، یا «پاسخگو نبود» در repeat_on_results نیست → اقدام بعدی استراتژی
     newStatus = 'in_negotiation';
     nextActionDate = nowDatetime();
     nextAction = nextActionLabelAfterCall;
@@ -575,13 +587,13 @@ async function submitCallOutcome(caseId, body, user) {
     }
   }
 
-  const parts = [`وضعیت تماس: ${b.call_status}`];
+  const parts = [`وضعیت تماس: ${callStatus}`];
   if (b.no_payment_reason) parts.push(`دلیل عدم پرداخت: ${b.no_payment_reason}`);
   if (b.payment_decision) parts.push(`تصمیم به پرداخت: ${b.payment_decision}`);
   if (willPay) parts.push(`تعهد: ${b.promised_amount} ریال در ${promisedDatetime}`);
   if (nextCallJalali) parts.push(`تماس بعدی: ${nextCallJalali}`);
   if (shouldRetryNegotiator) {
-    parts.push(`تکرار تماس — ${b.call_status} (تلاش ${attemptsMade} از ${maxRepeat})`);
+    parts.push(`تکرار تماس — ${callStatus} (تلاش ${attemptsMade} از ${maxRepeat})`);
   }
   if (reachedMax && !isDeath && !b.refer_to_legal && !shouldRetryNegotiator) {
     parts.push(`آخرین تماس — اقدام بعدی: ${nextActionLabelAfterCall}`);
@@ -590,128 +602,8 @@ async function submitCallOutcome(caseId, body, user) {
   if (b.refer_to_legal) parts.push('ارجاع به حقوقی');
   const resultText = parts.join(' · ');
 
-  const maxSeq = query('SELECT COALESCE(MAX(seq),0) AS m FROM case_actions WHERE case_id = $id', {
-    $id: id,
-  })[0].m;
-
-  run(
-    `INSERT INTO case_actions
-        (case_id, seq, action_type, body_text, result, action_date, cost, repeat_count, call_status, next_call_date)
-       VALUES ($cid, $seq, 'negotiator_call', NULL, $res, $date, $cost, $rep, $cs, $ncd)`,
-    {
-      $cid: id,
-      $seq: maxSeq + 1,
-      $res: resultText,
-      $date: nowJalaliDateTime(),
-      $cost: cost,
-      $rep: attemptsMade,
-      $cs: b.call_status,
-      $ncd: nextCallJalali,
-    }
-  );
-
-  run(
-    `UPDATE cases SET
-        call_count = $cc,
-        current_action_repeat = $rep,
-        case_status = $st,
-        next_action = $na,
-        next_action_date = $nad,
-        action_status = $as,
-        last_action = 'تماس مذاکره‌کننده',
-        last_action_date = $cd,
-        case_cost = case_cost + $cost,
-        strategy_id = CASE WHEN $clear = 1 THEN NULL ELSE strategy_id END,
-        current_action_seq = CASE WHEN $clear = 1 THEN 0 ELSE current_action_seq END,
-        updated_at = datetime('now')
-       WHERE id = $id`,
-    {
-      $cc: newCallCount,
-      $rep: attemptsMade,
-      $st: newStatus,
-      $na: nextAction,
-      $nad: nextActionDate,
-      $as: calcActionStatus(nextActionDate),
-      $cd: b.call_date || null,
-      $cost: cost,
-      $clear: clearStrategy ? 1 : 0,
-      $id: id,
-    }
-  );
-
-  if (willPay && promisedDatetime) {
-    run(`DELETE FROM promises WHERE case_id = $id AND status = 'pending'`, { $id: id });
-    run(
-      `INSERT INTO promises (case_id, promised_datetime, amount, status)
-         VALUES ($id, $pdt, $amt, 'pending')`,
-      { $id: id, $pdt: promisedDatetime, $amt: Number(b.promised_amount) }
-    );
-  }
-
-  if (b.call_status === 'پاسخگو نبود' && !b.refer_to_legal && !isDeath && shouldRetryNegotiator) {
-    await sendSms(c.mobile, NO_ANSWER_SMS_TEXT);
-    run(
-      `INSERT INTO case_history
-          (case_id, debtor_id, user_name, operation, case_status, details)
-         VALUES ($id, $did, 'سیستم', 'ارسال پیامک عدم پاسخگویی', $st, $det)`,
-      { $id: id, $did: c.debtor_id, $st: newStatus, $det: NO_ANSWER_SMS_TEXT }
-    );
-  }
-
-  if (b.send_payment_link) {
-    const linkText = replacePlaceholders(PAYMENT_LINK_SMS_TEMPLATE, {
-      userName: debtorName,
-      claimsAmount: c.claims_amount,
-    });
-    await sendSms(c.mobile, linkText);
-    run(
-      `INSERT INTO case_history
-          (case_id, debtor_id, user_name, operation, case_status, details)
-         VALUES ($id, $did, $user, 'ارسال لینک پرداخت', $st, $det)`,
-      {
-        $id: id,
-        $did: c.debtor_id,
-        $user: userName,
-        $st: newStatus,
-        $det: linkText,
-      }
-    );
-  }
-
-  if (isDeath) {
-    run(
-      `INSERT INTO case_history
-          (case_id, debtor_id, user_name, operation, case_status, details)
-         VALUES ($id, $did, $user, 'سوخت پرونده — فوت کاربر', $st, $det)`,
-      {
-        $id: id,
-        $did: c.debtor_id,
-        $user: userName,
-        $st: newStatus,
-        $det: 'پرونده به دلیل فوت کاربر سوخت شد و استراتژی متوقف گردید.',
-      }
-    );
-  }
-
-  if (b.refer_to_legal) {
-    run(
-      `INSERT INTO case_history
-          (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-         VALUES ($id, $did, $user, 'ارجاع به حقوقی توسط مذاکره‌کننده', $st, $na, $nad, $det)`,
-      {
-        $id: id,
-        $did: c.debtor_id,
-        $user: userName,
-        $st: newStatus,
-        $na: nextAction,
-        $nad: nextActionDate,
-        $det: 'ارجاع به حقوقی توسط مذاکره‌کننده',
-      }
-    );
-  }
-
   const historyDetails = JSON.stringify({
-    call_status: b.call_status,
+    call_status: callStatus,
     no_payment_reason: b.no_payment_reason || null,
     payment_decision: b.payment_decision || null,
     promised_date: willPay ? promisedDate : null,
@@ -731,20 +623,114 @@ async function submitCallOutcome(caseId, body, user) {
     refer_to_legal: Boolean(b.refer_to_legal),
   });
 
-  run(
-    `INSERT INTO case_history
-        (case_id, debtor_id, user_name, operation, case_status, next_action, next_action_date, details)
-       VALUES ($id, $did, $user, 'ثبت خروجی تماس', $st, $na, $nad, $details)`,
-    {
-      $id: id,
-      $did: c.debtor_id,
-      $user: userName,
-      $st: newStatus,
-      $na: nextAction,
-      $nad: nextActionDate,
-      $details: historyDetails,
+  transaction(() => {
+    insertActionEvent({
+      case_id: id,
+      action_type: 'negotiator_call',
+      result: resultText,
+      seq: maxActionSeq(id) + 1,
+      cost,
+      repeat_count: attemptsMade,
+      details: callStatus,
+      next_action_date: nextCallJalali,
+    });
+
+    run(
+      `UPDATE cases SET
+          call_count = $cc,
+          current_action_repeat = $rep,
+          case_status = $st,
+          next_action = $na,
+          next_action_date = $nad,
+          action_status = $as,
+          last_action = 'تماس مذاکره‌کننده',
+          last_action_date = $cd,
+          case_cost = case_cost + $cost,
+          strategy_id = CASE WHEN $clear = 1 THEN NULL ELSE strategy_id END,
+          current_action_seq = CASE WHEN $clear = 1 THEN 0 ELSE current_action_seq END,
+          updated_at = datetime('now')
+         WHERE id = $id`,
+      {
+        $cc: newCallCount,
+        $rep: attemptsMade,
+        $st: newStatus,
+        $na: nextAction,
+        $nad: nextActionDate,
+        $as: calcActionStatus(nextActionDate),
+        $cd: b.call_date || null,
+        $cost: cost,
+        $clear: clearStrategy ? 1 : 0,
+        $id: id,
+      }
+    );
+
+    if (willPay && promisedDatetime) {
+      run(`DELETE FROM promises WHERE case_id = $id AND status = 'pending'`, { $id: id });
+      run(
+        `INSERT INTO promises (case_id, promised_datetime, amount, status)
+           VALUES ($id, $pdt, $amt, 'pending')`,
+        { $id: id, $pdt: promisedDatetime, $amt: Number(b.promised_amount) }
+      );
     }
-  );
+
+    if (isDeath) {
+      insertHistoryEvent({
+        case_id: id,
+        operation: 'سوخت پرونده — فوت کاربر',
+        user_name: userName,
+        case_status: newStatus,
+        details: 'پرونده به دلیل فوت کاربر سوخت شد و استراتژی متوقف گردید.',
+      });
+    }
+
+    if (b.refer_to_legal) {
+      insertHistoryEvent({
+        case_id: id,
+        operation: 'ارجاع به حقوقی توسط مذاکره‌کننده',
+        user_name: userName,
+        case_status: newStatus,
+        next_action: nextAction,
+        next_action_date: nextActionDate,
+        details: 'ارجاع به حقوقی توسط مذاکره‌کننده',
+      });
+    }
+
+    insertHistoryEvent({
+      case_id: id,
+      operation: 'ثبت خروجی تماس',
+      user_name: userName,
+      case_status: newStatus,
+      next_action: nextAction,
+      next_action_date: nextActionDate,
+      details: historyDetails,
+    });
+  });
+
+  if (isNoAnswer && !b.refer_to_legal && !isDeath && shouldRetryNegotiator) {
+    await sendSms(c.mobile, NO_ANSWER_SMS_TEXT);
+    insertHistoryEvent({
+      case_id: id,
+      operation: 'ارسال پیامک عدم پاسخگویی',
+      user_name: 'سیستم',
+      case_status: newStatus,
+      details: NO_ANSWER_SMS_TEXT,
+    });
+  }
+
+  if (b.send_payment_link) {
+    const linkText = replacePlaceholders(PAYMENT_LINK_SMS_TEMPLATE, {
+      userName: debtorName,
+      claimsAmount: c.claims_amount,
+    });
+    await sendSms(c.mobile, linkText);
+    insertHistoryEvent({
+      case_id: id,
+      operation: 'ارسال لینک پرداخت',
+      user_name: userName,
+      case_status: newStatus,
+      details: linkText,
+    });
+  }
 
   return { id, case_status: newStatus, call_count: newCallCount, cost };
 }

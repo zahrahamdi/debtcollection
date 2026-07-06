@@ -1,23 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, LogOut } from 'lucide-react'
-import { getCurrentUser, getUserDisplayName, isAdmin, isNegotiator, logout } from '../../utils/auth'
+import { useAuth } from '../../context/AuthContext'
 
 const roleLabel = {
   admin: 'ادمین وصول مطالبات',
   negotiator: 'مذاکره‌کننده',
 }
 
-function userRoleLabel(user) {
-  if (isAdmin(user)) return roleLabel.admin
-  if (isNegotiator(user)) return roleLabel.negotiator
-  return 'کاربر'
-}
-
 export default function Header({ title }) {
-  const user = getCurrentUser()
-  const name = getUserDisplayName(user)
+  const { getUserDisplayName, isAdmin, isNegotiator, logout } = useAuth()
+  const name = getUserDisplayName()
   const [open, setOpen] = useState(false)
   const menuRef = useRef(null)
+
+  const role =
+    isAdmin() ? roleLabel.admin : isNegotiator() ? roleLabel.negotiator : 'کاربر'
 
   useEffect(() => {
     const close = (e) => {
@@ -39,7 +36,7 @@ export default function Header({ title }) {
         >
           <div className="text-left leading-tight">
             <div className="text-sm font-semibold text-slate-700">{name}</div>
-            <div className="text-xs text-slate-400">{userRoleLabel(user)}</div>
+            <div className="text-xs text-slate-400">{role}</div>
           </div>
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-700">
             {name?.[0] ?? 'ک'}
