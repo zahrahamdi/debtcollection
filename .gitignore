@@ -6,11 +6,12 @@ node_modules/
 .env.*
 !.env.example
 
-# Database (local demo data)
-backend/database.sqlite
+# Database — journals/temp ignored; demo DB committed for team handoff
 backend/database.sqlite-journal
 *.sqlite
 *.sqlite-journal
+# except the demo database, committed intentionally so a fresh clone has all data:
+!backend/database.sqlite
 
 # Build output
 frontend/dist/
